@@ -1,0 +1,16 @@
+[project]
+name = "datalake-offline-biometrics"
+version = "0.1.0"
+description = "Offline facial recognition and liveness detection primitives for Datalake 3.0 edge deployments."
+requires-python = ">=3.10"
+readme = "README.md"
+license = { text = "Proprietary" }
+authors = [{ name = "Datalake 3.0" }]
+dependencies = []
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["datalake_offline_biometrics*"]

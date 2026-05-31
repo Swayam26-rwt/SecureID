@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Datalake 3.0 offline facial recognition and liveness detection demo"
+    />
+    <title>Datalake 3.0 Offline Biometrics Demo</title>
+    <link rel="stylesheet" href="assets/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Datalake 3.0 Edge Auth</p>
+          <h1>Offline Biometrics Demo</h1>
+        </div>
+        <div class="status-strip" aria-label="runtime status">
+          <span class="status-pill">Browser only</span>
+          <span class="status-pill">0 network calls</span>
+          <span class="status-pill">Templates in memory</span>
+        </div>
+      </header>
+
+      <section class="workspace" aria-label="biometric demonstration console">
+        <aside class="control-panel" aria-label="scenario controls">
+          <div class="panel-heading">
+            <span class="section-kicker">Claim</span>
+            <strong>Identity</strong>
+          </div>
+
+          <label class="field-label" for="claimedIdentity">Subject ID</label>
+          <select id="claimedIdentity" class="select">
+            <option value="operator-a">Operator A</option>
+            <option value="operator-b">Operator B</option>
+            <option value="operator-c">Operator C</option>
+          </select>
+
+          <label class="field-label" for="probeSubject">Live sample</label>
+          <select id="probeSubject" class="select">
+            <option value="operator-a">Operator A</option>
+            <option value="operator-b">Operator B</option>
+            <option value="operator-c">Operator C</option>
+          </select>
+
+          <div class="segmented" role="group" aria-label="challenge mode">
+            <button class="segment active" data-challenge="blink" type="button">
+              Blink
+            </button>
+            <button class="segment" data-challenge="turn_left" type="button">
+              Turn
+            </button>
+            <button class="segment" data-challenge="static" type="button">
+              Static
+            </button>
+          </div>
+
+          <label class="field-label" for="lighting">Lighting</label>
+          <input id="lighting" type="range" min="-28" max="28" value="0" />
+
+          <label class="field-label" for="jitter">Camera jitter</label>
+          <input id="jitter" type="range" min="0" max="8" value="4" />
+
+          <div class="button-grid">
+            <button id="runVerified" class="action primary" type="button">
+              Run verified entry
+            </button>
+            <button id="runSpoof" class="action" type="button">
+              Run spoof check
+            </button>
+            <button id="runMismatch" class="action" type="button">
+              Run mismatch
+            </button>
+            <button id="enrollCurrent" class="action" type="button">
+              Enroll sample
+            </button>
+          </div>
+
+          <div class="registry" aria-label="enrolled subjects">
+            <div class="registry-header">
+              <span>Subject</span>
+              <span>Templates</span>
+            </div>
+            <div id="registryList"></div>
+          </div>
+        </aside>
+
+        <section class="demo-panel" aria-label="capture and scoring">
+          <div class="capture-grid">
+            <div class="scanner">
+              <div class="canvas-frame">
+                <canvas id="faceCanvas" width="256" height="256"></canvas>
+                <div class="scanline" aria-hidden="true"></div>
+              </div>
+              <div class="capture-meta">
+                <span id="captureLabel">Operator A · blink challenge</span>
+                <strong id="combinedVerdict">READY</strong>
+              </div>
+            </div>
+
+            <div class="score-panel">
+              <div class="score-row">
+                <span>Recognition</span>
+                <strong id="recognitionScore">0.000</strong>
+                <div class="meter">
+                  <span id="recognitionMeter"></span>
+                </div>
+              </div>
+              <div class="score-row">
+                <span>Liveness</span>
+                <strong id="livenessScore">0.000</strong>
+                <div class="meter">
+                  <span id="livenessMeter"></span>
+                </div>
+              </div>
+              <div class="score-row">
+                <span>Challenge</span>
+                <strong id="challengeScore">0.000</strong>
+                <div class="meter">
+                  <span id="challengeMeter"></span>
+                </div>
+              </div>
+              <div class="result-box" id="resultBox">
+                <span>Decision</span>
+                <strong>Awaiting sample</strong>
+              </div>
+            </div>
+          </div>
+
+          <div class="analysis-grid">
+            <div class="analysis-block">
+              <div class="block-title">
+                <span class="section-kicker">Frame burst</span>
+                <strong>Liveness trace</strong>
+              </div>
+              <div id="filmstrip" class="filmstrip" aria-label="sampled frames"></div>
+            </div>
+
+            <div class="analysis-block">
+              <div class="block-title">
+                <span class="section-kicker">Template</span>
+                <strong>Local vector</strong>
+              </div>
+              <canvas id="vectorCanvas" width="520" height="120"></canvas>
+            </div>
+          </div>
+
+          <div class="log-panel">
+            <div class="block-title">
+              <span class="section-kicker">Audit</span>
+              <strong>Last decision</strong>
+            </div>
+            <ul id="auditLog" aria-live="polite"></ul>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <script src="assets/app.js"></script>
+  </body>
+</html>
