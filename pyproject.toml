@@ -1,12 +1,37 @@
 [project]
 name = "datalake-offline-biometrics"
-version = "0.1.0"
-description = "Offline facial recognition and liveness detection primitives for Datalake 3.0 edge deployments."
-requires-python = ">=3.10"
+version = "1.0.0"
+description = "Offline facial recognition and liveness detection primitives for NHAI Datalake 3.0 edge deployments."
+requires-python = ">=3.9"
 readme = "README.md"
-license = { text = "Proprietary" }
-authors = [{ name = "Datalake 3.0" }]
+license = { text = "MIT" }
+authors = [{ name = "Swayam Rawat", email = "swaymrawat862@gmail.com" }]
+keywords = ["biometrics", "facial-recognition", "liveness-detection", "edge-computing", "nhai"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
+    "Topic :: Scientific/Engineering :: Image Recognition",
+]
 dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "mypy>=1.9.0",
+    "ruff>=0.3.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/Swayam26-rwt/NHAI"
+Repository = "https://github.com/Swayam26-rwt/NHAI.git"
+Documentation = "https://github.com/Swayam26-rwt/NHAI#readme"
 
 [build-system]
 requires = ["setuptools>=68"]
@@ -14,3 +39,16 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["datalake_offline_biometrics*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_unused_configs = true
