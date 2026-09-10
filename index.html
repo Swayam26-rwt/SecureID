@@ -5,9 +5,21 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta
       name="description"
-      content="Datalake 3.0 offline facial recognition and liveness detection demo"
+      content="Datalake 3.0 offline facial recognition and liveness detection demo — runs entirely in-browser with zero network calls."
     />
+    <meta name="theme-color" content="#1b2420" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#eef2ef" media="(prefers-color-scheme: light)" />
+
     <title>Datalake 3.0 Offline Biometrics Demo</title>
+
+    <!-- Google Fonts: Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap"
+    />
+
     <link rel="stylesheet" href="assets/styles.css" />
   </head>
   <body>
@@ -17,125 +29,203 @@
           <p class="eyebrow">Datalake 3.0 Edge Auth</p>
           <h1>Offline Biometrics Demo</h1>
         </div>
-        <div class="status-strip" aria-label="runtime status">
+        <div class="status-strip" aria-label="Runtime status">
           <span class="status-pill">Browser only</span>
           <span class="status-pill">0 network calls</span>
           <span class="status-pill">Templates in memory</span>
         </div>
       </header>
 
-      <section class="workspace" aria-label="biometric demonstration console">
-        <aside class="control-panel" aria-label="scenario controls">
+      <section class="workspace" aria-label="Biometric demonstration console">
+        <!-- ── Left: control panel ───────────────────────────────────────── -->
+        <aside class="control-panel" aria-label="Scenario controls">
           <div class="panel-heading">
             <span class="section-kicker">Claim</span>
             <strong>Identity</strong>
           </div>
 
-          <label class="field-label" for="claimedIdentity">Subject ID</label>
-          <select id="claimedIdentity" class="select">
-            <option value="operator-a">Operator A</option>
-            <option value="operator-b">Operator B</option>
-            <option value="operator-c">Operator C</option>
-          </select>
-
-          <label class="field-label" for="probeSubject">Live sample</label>
-          <select id="probeSubject" class="select">
-            <option value="operator-a">Operator A</option>
-            <option value="operator-b">Operator B</option>
-            <option value="operator-c">Operator C</option>
-          </select>
-
-          <div class="segmented" role="group" aria-label="challenge mode">
-            <button class="segment active" data-challenge="blink" type="button">
-              Blink
-            </button>
-            <button class="segment" data-challenge="turn_left" type="button">
-              Turn
-            </button>
-            <button class="segment" data-challenge="static" type="button">
-              Static
-            </button>
+          <div>
+            <label class="field-label" for="claimedIdentity">Subject ID</label>
+            <select id="claimedIdentity" class="select" aria-label="Claimed identity subject">
+              <option value="operator-a">Operator A</option>
+              <option value="operator-b">Operator B</option>
+              <option value="operator-c">Operator C</option>
+            </select>
           </div>
 
-          <label class="field-label" for="lighting">Lighting</label>
-          <input id="lighting" type="range" min="-28" max="28" value="0" />
+          <div>
+            <label class="field-label" for="probeSubject">Live sample</label>
+            <select id="probeSubject" class="select" aria-label="Probe subject for live sample">
+              <option value="operator-a">Operator A</option>
+              <option value="operator-b">Operator B</option>
+              <option value="operator-c">Operator C</option>
+            </select>
+          </div>
 
-          <label class="field-label" for="jitter">Camera jitter</label>
-          <input id="jitter" type="range" min="0" max="8" value="4" />
+          <div
+            class="segmented"
+            role="group"
+            aria-label="Liveness challenge mode"
+          >
+            <button
+              class="segment active"
+              data-challenge="blink"
+              type="button"
+              aria-pressed="true"
+            >Blink</button>
+            <button
+              class="segment"
+              data-challenge="turn_left"
+              type="button"
+              aria-pressed="false"
+            >Turn</button>
+            <button
+              class="segment"
+              data-challenge="static"
+              type="button"
+              aria-pressed="false"
+            >Static</button>
+          </div>
+
+          <div>
+            <label class="field-label" for="lighting">Lighting offset</label>
+            <input
+              id="lighting"
+              type="range"
+              min="-28"
+              max="28"
+              value="0"
+              aria-label="Lighting offset in simulated exposure units"
+            />
+          </div>
+
+          <div>
+            <label class="field-label" for="jitter">Camera jitter</label>
+            <input
+              id="jitter"
+              type="range"
+              min="0"
+              max="8"
+              value="4"
+              aria-label="Camera jitter in pixels"
+            />
+          </div>
 
           <div class="button-grid">
-            <button id="runVerified" class="action primary" type="button">
+            <button
+              id="runVerified"
+              class="action primary"
+              type="button"
+              aria-label="Run verified entry scenario: Operator A vs Operator A"
+            >
               Run verified entry
             </button>
-            <button id="runSpoof" class="action" type="button">
+            <button
+              id="runSpoof"
+              class="action"
+              type="button"
+              aria-label="Run spoof check: static frame against claimed identity"
+            >
               Run spoof check
             </button>
-            <button id="runMismatch" class="action" type="button">
+            <button
+              id="runMismatch"
+              class="action"
+              type="button"
+              aria-label="Run identity mismatch: Operator A claimed, Operator B probe"
+            >
               Run mismatch
             </button>
-            <button id="enrollCurrent" class="action" type="button">
+            <button
+              id="enrollCurrent"
+              class="action"
+              type="button"
+              aria-label="Enroll the currently selected probe subject"
+            >
               Enroll sample
             </button>
           </div>
 
-          <div class="registry" aria-label="enrolled subjects">
-            <div class="registry-header">
+          <div class="registry" aria-label="Enrolled subjects">
+            <div class="registry-header" role="row">
               <span>Subject</span>
               <span>Templates</span>
             </div>
-            <div id="registryList"></div>
+            <div id="registryList" role="list"></div>
           </div>
         </aside>
 
-        <section class="demo-panel" aria-label="capture and scoring">
+        <!-- ── Right: demo panel ─────────────────────────────────────────── -->
+        <section class="demo-panel" aria-label="Capture and scoring">
           <div class="capture-grid">
+            <!-- Face scanner -->
             <div class="scanner">
-              <div class="canvas-frame">
-                <canvas id="faceCanvas" width="256" height="256"></canvas>
+              <div class="canvas-frame" aria-label="Synthetic face frame">
+                <!-- Canvas sized to match SIZE=96 constant in app.js -->
+                <canvas
+                  id="faceCanvas"
+                  width="96"
+                  height="96"
+                  aria-label="Rendered synthetic face"
+                  role="img"
+                ></canvas>
                 <div class="scanline" aria-hidden="true"></div>
               </div>
               <div class="capture-meta">
                 <span id="captureLabel">Operator A · blink challenge</span>
-                <strong id="combinedVerdict">READY</strong>
+                <!-- aria-live so screen readers announce verdict changes -->
+                <strong
+                  id="combinedVerdict"
+                  role="status"
+                  aria-live="polite"
+                  aria-atomic="true"
+                >READY</strong>
               </div>
             </div>
 
-            <div class="score-panel">
+            <!-- Score panel -->
+            <div class="score-panel" aria-label="Biometric scores">
               <div class="score-row">
                 <span>Recognition</span>
-                <strong id="recognitionScore">0.000</strong>
-                <div class="meter">
+                <strong id="recognitionScore" aria-label="Recognition score">0.000</strong>
+                <div class="meter" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" aria-label="Recognition meter">
                   <span id="recognitionMeter"></span>
                 </div>
               </div>
               <div class="score-row">
                 <span>Liveness</span>
-                <strong id="livenessScore">0.000</strong>
-                <div class="meter">
+                <strong id="livenessScore" aria-label="Liveness score">0.000</strong>
+                <div class="meter" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" aria-label="Liveness meter">
                   <span id="livenessMeter"></span>
                 </div>
               </div>
               <div class="score-row">
                 <span>Challenge</span>
-                <strong id="challengeScore">0.000</strong>
-                <div class="meter">
+                <strong id="challengeScore" aria-label="Challenge score">0.000</strong>
+                <div class="meter" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" aria-label="Challenge meter">
                   <span id="challengeMeter"></span>
                 </div>
               </div>
-              <div class="result-box" id="resultBox">
+              <div class="result-box" id="resultBox" aria-label="Decision">
                 <span>Decision</span>
                 <strong>Awaiting sample</strong>
               </div>
             </div>
           </div>
 
+          <!-- Analysis row -->
           <div class="analysis-grid">
             <div class="analysis-block">
               <div class="block-title">
                 <span class="section-kicker">Frame burst</span>
                 <strong>Liveness trace</strong>
               </div>
-              <div id="filmstrip" class="filmstrip" aria-label="sampled frames"></div>
+              <div
+                id="filmstrip"
+                class="filmstrip"
+                aria-label="Sampled frames from liveness burst"
+                role="list"
+              ></div>
             </div>
 
             <div class="analysis-block">
@@ -143,21 +233,34 @@
                 <span class="section-kicker">Template</span>
                 <strong>Local vector</strong>
               </div>
-              <canvas id="vectorCanvas" width="520" height="120"></canvas>
+              <!-- Width=1 so JS ResizeObserver can set the real pixel size -->
+              <canvas
+                id="vectorCanvas"
+                width="1"
+                height="120"
+                aria-label="Feature vector bar chart"
+                role="img"
+              ></canvas>
             </div>
           </div>
 
+          <!-- Audit log -->
           <div class="log-panel">
             <div class="block-title">
               <span class="section-kicker">Audit</span>
-              <strong>Last decision</strong>
+              <strong>Decision log</strong>
             </div>
-            <ul id="auditLog" aria-live="polite"></ul>
+            <ul
+              id="auditLog"
+              aria-live="polite"
+              aria-label="Audit log of recent decisions"
+            ></ul>
           </div>
         </section>
       </section>
     </main>
 
-    <script src="assets/app.js"></script>
+    <!-- defer: executes after DOM parse, no module CORS restriction over file:// -->
+    <script defer src="assets/app.js"></script>
   </body>
 </html>
