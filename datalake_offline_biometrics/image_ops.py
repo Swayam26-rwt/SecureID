@@ -199,3 +199,65 @@ def crop_fraction(
     right = max(left + 1, min(w, int(round(x1 * w))))
     bottom = max(top + 1, min(h, int(round(y1 * h))))
     return [row[left:right] for row in src[top:bottom]]
+
+
+def synthetic_face(
+    *,
+    eye_gap: int = 28,
+    mouth_curve: int = 0,
+    shift_x: int = 0,
+    shift_y: int = 0,
+    blink: bool = False,
+    noise: int | float = 0,
+    size: int = 96,
+) -> MutableGrayImage:
+    """Generate a synthetic 2D grayscale face matrix for testing and benchmarking."""
+    image = [[235 for _ in range(size)] for _ in range(size)]
+    cx = size // 2 + shift_x
+    cy = size // 2 + shift_y
+
+    for y in range(size):
+        for x in range(size):
+            nx = (x - cx) / 32
+            ny = (y - cy) / 40
+            if nx * nx + ny * ny <= 1.0:
+                image[y][x] = 172
+
+    eye_y = cy - 13
+    for eye_x in (cx - eye_gap // 2, cx + eye_gap // 2):
+        for y in range(eye_y - 3, eye_y + 4):
+            for x in range(eye_x - 6, eye_x + 7):
+                if 0 <= y < size and 0 <= x < size:
+                    if blink:
+                        if abs(y - eye_y) <= 1:
+                            image[y][x] = 65
+                    else:
+                        nx = (x - eye_x) / 6
+                        ny = (y - eye_y) / 3
+                        if nx * nx + ny * ny <= 1.0:
+                            image[y][x] = 42
+
+    nose_x = cx + mouth_curve // 2
+    for offset in range(10):
+        y = cy - 4 + offset
+        x = nose_x + offset // 3
+        if 0 <= y < size and 0 <= x < size:
+            image[y][x] = 118
+
+    mouth_y = cy + 18
+    for offset in range(-14, 15):
+        curve = int(round((offset * offset) / 45.0 * (1 if mouth_curve >= 0 else -1)))
+        y = mouth_y + (curve if mouth_curve != 0 else 0)
+        x = cx + offset
+        for dy in (-1, 0, 1):
+            if 0 <= y + dy < size and 0 <= x < size:
+                image[y + dy][x] = 58
+
+    if noise:
+        noise_val = int(round(noise if noise > 1 else noise * 100))
+        for y in range(size):
+            for x in range(size):
+                delta = ((x * 17 + y * 31 + noise_val) % (noise_val * 2 + 1)) - noise_val
+                image[y][x] = clamp_u8(image[y][x] + delta)
+
+    return image
