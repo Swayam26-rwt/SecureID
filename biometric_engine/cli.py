@@ -1,4 +1,4 @@
-"""Command-line interface for NHAI Datalake 3.0 Offline Biometrics diagnostics and benchmarks."""
+"""Command-line interface for SecureID Offline Biometrics diagnostics and benchmarks."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from .image_ops import synthetic_face
 
 def run_benchmark(iterations: int = 100) -> int:
     """Benchmark enrollment and verification speed on the host device."""
-    print(f"[*] Running NHAI Biometrics benchmark ({iterations} iterations)...")
+    print(f"[*] Running SecureID Biometrics benchmark ({iterations} iterations)...")
 
     engine = OfflineBiometricEngine()
     face_a1 = synthetic_face(eye_gap=30, mouth_curve=0, noise=0.05)
@@ -45,8 +45,8 @@ def run_benchmark(iterations: int = 100) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="nhai-biometrics",
-        description="NHAI Datalake 3.0 Offline Biometrics CLI tool",
+        prog="secureid",
+        description="SecureID — Offline Facial Recognition & Liveness Detection CLI",
     )
     subparsers = parser.add_subparsers(dest="command", help="Available subcommands")
 
@@ -62,10 +62,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "benchmark":
         return run_benchmark(iterations=args.iterations)
     elif args.command == "info":
-        print("NHAI Datalake 3.0 Offline Biometrics v1.0.0")
-        print("Algorithm: Local Binary Pattern Histograms (LBPH) with multi-block spatial grid")
-        print("Liveness: Multi-factor (Motion variance, Texture entropy, Challenge-response)")
-        print("Security: HMAC-SHA256 authenticated template storage")
+        print("SecureID — Offline Facial Recognition Engine v2.0.0")
+        print("Algorithm: Local Binary Pattern Histograms (LBPH) + Gabor wavelets + LPQ")
+        print("Liveness: Multi-scale LBP entropy, optical flow arc, facial symmetry, challenge-response")
+        print("Security: HMAC-SHA256 authenticated template store with SHA-256 audit ledger")
         return 0
     else:
         parser.print_help()

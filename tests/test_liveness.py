@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import unittest
 
-from datalake_offline_biometrics.image_ops import synthetic_face
-from datalake_offline_biometrics.liveness import LivenessDetector, LivenessResult
+from biometric_engine.image_ops import synthetic_face
+from biometric_engine.liveness import LivenessDetector, LivenessResult
 
 
 class TestLivenessDetector(unittest.TestCase):

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from datalake_offline_biometrics.image_ops import (
+from biometric_engine.image_ops import (
     clamp_u8,
     crop_fraction,
     histogram_equalize,

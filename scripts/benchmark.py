@@ -18,16 +18,16 @@ from pathlib import Path
 # Allow running from repo root without install
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from datalake_offline_biometrics.image_ops import (
+from biometric_engine.image_ops import (
     blur_score,
     gabor_features,
     image_quality_score,
     lpq_features,
     synthetic_face,
 )
-from datalake_offline_biometrics.liveness import LivenessDetector
-from datalake_offline_biometrics.ml_fusion import FusionConfig, ScoreFusion
-from datalake_offline_biometrics.recognition import LBPHFaceRecognizer
+from biometric_engine.liveness import LivenessDetector
+from biometric_engine.ml_fusion import FusionConfig, ScoreFusion
+from biometric_engine.recognition import LBPHFaceRecognizer
 
 
 def timeit(fn, *, n: int = 5) -> tuple[float, float]:
@@ -133,7 +133,7 @@ def run(*, quick: bool = False) -> dict[str, object]:
     n = 3 if quick else 8
 
     print("─" * 60)
-    print("  NHAI Datalake 3.0 — ML Algorithm Benchmark Suite v2.0.0")
+    print("  SecureID — Offline ML Biometric Benchmark Suite v2.0.0")
     print("─" * 60)
 
     print("\n[1/5] Feature extraction latency …")
@@ -176,7 +176,7 @@ def run(*, quick: bool = False) -> dict[str, object]:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="NHAI biometrics ML benchmark")
+    parser = argparse.ArgumentParser(description="SecureID biometrics ML benchmark")
     parser.add_argument("--quick", action="store_true", help="Fewer iterations for CI")
     parser.add_argument("--export", metavar="FILE", help="Export results to JSON file")
     args = parser.parse_args()

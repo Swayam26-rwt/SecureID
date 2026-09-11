@@ -4,7 +4,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from datalake_offline_biometrics import OfflineBiometricEngine, TemplateStore
+from biometric_engine import OfflineBiometricEngine, TemplateStore
 
 
 def synthetic_face(

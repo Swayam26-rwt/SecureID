@@ -1,4 +1,4 @@
-"""Offline facial recognition and liveness primitives for NHAI Datalake 3.0.
+"""SecureID — Offline Facial Recognition and Liveness Detection Engine.
 
 v2.0.0 — Advanced ML capstone release:
   - Multi-modal score-level fusion (ml_fusion)

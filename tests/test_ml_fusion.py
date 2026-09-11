@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import unittest
 
-from datalake_offline_biometrics.analytics import AuthEvent, SessionAnalytics
-from datalake_offline_biometrics.ml_fusion import FusionConfig, FusionResult, ScoreFusion
+from biometric_engine.analytics import AuthEvent, SessionAnalytics
+from biometric_engine.ml_fusion import FusionConfig, FusionResult, ScoreFusion
 
 
 class TestFusionConfig(unittest.TestCase):

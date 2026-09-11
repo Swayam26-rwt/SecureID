@@ -1,12 +1,12 @@
 [project]
-name = "datalake-offline-biometrics"
-version = "1.0.0"
-description = "Offline facial recognition and liveness detection primitives for NHAI Datalake 3.0 edge deployments."
+name = "secureid"
+version = "2.0.0"
+description = "SecureID — High-performance offline facial recognition and liveness detection engine with advanced ML signal processing."
 requires-python = ">=3.9"
 readme = "README.md"
 license = { text = "MIT" }
 authors = [{ name = "Swayam Rawat", email = "swaymrawat862@gmail.com" }]
-keywords = ["biometrics", "facial-recognition", "liveness-detection", "edge-computing", "nhai"]
+keywords = ["biometrics", "facial-recognition", "liveness-detection", "edge-computing", "computer-vision", "machine-learning", "secureid"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
@@ -16,10 +16,14 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Security",
     "Topic :: Scientific/Engineering :: Image Recognition",
 ]
 dependencies = []
+
+[project.scripts]
+secureid = "biometric_engine.cli:main"
 
 [project.optional-dependencies]
 dev = [
@@ -29,16 +33,16 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/Swayam26-rwt/NHAI"
-Repository = "https://github.com/Swayam26-rwt/NHAI.git"
-Documentation = "https://github.com/Swayam26-rwt/NHAI#readme"
+Homepage = "https://github.com/Swayam26-rwt/SecureID"
+Repository = "https://github.com/Swayam26-rwt/SecureID.git"
+Documentation = "https://github.com/Swayam26-rwt/SecureID#readme"
 
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["datalake_offline_biometrics*"]
+include = ["biometric_engine*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -71,7 +71,7 @@ class SessionReport:
 
 
 class SessionAnalytics:
-    """Operational analytics collector for NHAI edge deployments.
+    """Operational analytics collector for edge biometric deployments.
 
     Records authentication events in memory, computes rolling statistics,
     and exports JSON session reports. Designed to work both in real-time

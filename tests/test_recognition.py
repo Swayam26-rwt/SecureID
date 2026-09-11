@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import unittest
 
-from datalake_offline_biometrics.image_ops import synthetic_face
-from datalake_offline_biometrics.recognition import (
+from biometric_engine.image_ops import synthetic_face
+from biometric_engine.recognition import (
     AdaptiveThreshold,
     FaceTemplate,
     LBPHFaceRecognizer,
     OnlinePCAWhitener,
+    RecognitionResult,
     UNIFORM_LBP_LOOKUP,
 )
 

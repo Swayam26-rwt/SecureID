@@ -236,7 +236,7 @@ class LBPHFaceRecognizer:
         height: int = 96,
         grid_x: int = 8,
         grid_y: int = 8,
-        threshold: float = 0.78,
+        threshold: float = 0.40,  # Cosine similarity EER point for LBPH+Gabor features
         appearance_size: int = 24,
         use_gabor: bool = True,
         use_lpq: bool = False,      # Off by default — computationally expensive
