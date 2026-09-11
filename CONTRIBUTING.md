@@ -1,4 +1,4 @@
-# Contributing to NHAI Datalake 3.0 Offline Biometrics
+# Contributing to SecureID — Offline Facial Recognition Engine
 
 Thank you for your interest in contributing! This document outlines guidelines for submitting bug fixes, performance improvements, and algorithmic enhancements.
 
@@ -7,8 +7,8 @@ Thank you for your interest in contributing! This document outlines guidelines f
 1. **Prerequisites**: Python 3.9+ and a modern web browser for frontend verification.
 2. **Setup**:
    ```bash
-   git clone https://github.com/Swayam26-rwt/NHAI.git
-   cd NHAI
+   git clone https://github.com/Swayam26-rwt/SecureID.git
+   cd SecureID
    python3 -m venv .venv
    source .venv/bin/activate
    pip install -e .

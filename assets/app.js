@@ -1,5 +1,5 @@
 /**
- * NHAI Datalake 3.0 — Browser Biometric Simulator v2.0
+ * SecureID — Browser Biometric Simulator v2.0
  *
  * Full JavaScript port of the Python ML pipeline:
  *   - Multi-scale LBP + Gabor feature extraction (pure JS)
@@ -1176,7 +1176,7 @@ document.getElementById("btnExportLog").addEventListener("click", () => {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `nhai-audit-${Date.now()}.json`;
+  a.download = `secureid-audit-${Date.now()}.json`;
   a.click();
   URL.revokeObjectURL(url);
 });

@@ -1,6 +1,6 @@
 # CHANGELOG
 
-All notable changes to NHAI Datalake 3.0 Biometric Engine are documented here.
+All notable changes to SecureID — Offline Facial Recognition Engine are documented here.
 This project follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 

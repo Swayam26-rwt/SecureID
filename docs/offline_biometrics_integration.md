@@ -10,7 +10,7 @@
                                | Grayscale Face Crops (>= 96x96)
                                v
 +-------------------------------------------------------------+
-|               NHAI OfflineBiometricEngine                   |
+|                 SecureID BiometricEngine                    |
 |                                                             |
 |   +-----------------------+     +-----------------------+   |
 |   |   LivenessDetector    |     |   LBPHFaceRecognizer  |   |
@@ -32,9 +32,9 @@
 +-------------------------------------------------------------+
 ```
 
-## Placement in NHAI Datalake 3.0
+## Placement in Edge Infrastructure
 
-The package is designed to sit directly behind the Datalake edge authentication or toll plaza attendance boundary:
+The package is designed to sit directly behind edge authentication, access control, and embedded terminal boundaries:
 
 1. The existing camera layer detects a face and sends normalized face crops to `OfflineBiometricEngine`.
 2. **Enrollment**: Calls `engine.enroll(subject_id, face_crops)` with 3–5 captures per operator under typical booth lighting.
@@ -75,9 +75,9 @@ For high-security access control terminals, raise both thresholds (`0.82` and `0
 ## Secure Template Storage
 
 ```python
-from datalake_offline_biometrics import OfflineBiometricEngine, TemplateStore
+from biometric_engine import OfflineBiometricEngine, TemplateStore
 
-store = TemplateStore("/var/lib/datalake/biometrics/templates.json", secret=b"site-local-key")
+store = TemplateStore("/var/lib/secureid/biometrics/templates.json", secret=b"site-local-key")
 engine = OfflineBiometricEngine()
 
 engine.enroll("operator-1001", face_crops)
