@@ -1,851 +1,1201 @@
 /**
- * Datalake 3.0 Offline Biometrics Demo — app.js
- * Industry-grade rewrite: encapsulated state, XSS-safe DOM, fixed liveness
- * logic, ResizeObserver canvas, rolling audit log, ARIA live regions.
+ * NHAI Datalake 3.0 — Browser Biometric Simulator v2.0
+ *
+ * Full JavaScript port of the Python ML pipeline:
+ *   - Multi-scale LBP + Gabor feature extraction (pure JS)
+ *   - Cosine similarity with online PCA whitening
+ *   - Adaptive EER-based threshold
+ *   - Optical flow arc + face symmetry liveness
+ *   - Score-level fusion (weighted sum / geometric / min)
+ *   - Session analytics: FAR, FRR, TAR, attack distribution
+ *   - Canvas histogram + timeline rendering
+ *   - SHA-256 cryptographic audit chain (via Web Crypto API)
+ *   - XAI decision trace
  */
 
-// ─── Configuration ────────────────────────────────────────────────────────────
+"use strict";
 
-const CONFIG = Object.freeze({
-  SIZE: 96,
-  RECOGNITION_THRESHOLD: 0.78,
-  LIVENESS_THRESHOLD: 0.62,
-  CHALLENGE_PASS_THRESHOLD: 0.55,
-  BASE_NOISE: 3,
-  LBP_GRID: 8,
-  LBP_BINS: 59,
-  LIVENESS_WEIGHTS: Object.freeze({
-    texture: 0.24,
-    entropy: 0.16,
-    motion: 0.34,
-    exposureVariance: 0.12,
-    challenge: 0.30,
-    normalizer: 1.16,
-  }),
-  DISTANCE_WEIGHTS: Object.freeze({ lbp: 0.52, appearance: 0.95, geometry: 3.2 }),
-  AUDIT_MAX_ENTRIES: 10,
-});
+// ─── 0. Global State ─────────────────────────────────────────────────────────
 
-// ─── Subject profiles ─────────────────────────────────────────────────────────
+const STATE = {
+  metric:    "cosine",
+  threshold: 0.65,
+  noise:     3,
+  attack:    "none",
+  challenge: "blink",
+  templates: new Map(),   // subject_id → [{ vector, quality }]
+  events:    [],          // AuthEvent objects
+  prevAuditHash: "0".repeat(64),
+  auditIndex: 0,
+};
 
-const SUBJECTS = Object.freeze({
-  "operator-a": Object.freeze({ label: "Operator A", eyeGap: 30, mouthCurve:  0, noseOffset:  0, brow:  0 }),
-  "operator-b": Object.freeze({ label: "Operator B", eyeGap: 20, mouthCurve:  8, noseOffset:  3, brow:  2 }),
-  "operator-c": Object.freeze({ label: "Operator C", eyeGap: 36, mouthCurve: -5, noseOffset: -4, brow: -2 }),
-});
+const SUBJECTS = {
+  "sharma-r":  { name: "Sharma, R.",  id: "NHO-0241", eyeGap: 30, mouthCurve: 1 },
+  "patel-v":   { name: "Patel, V.",   id: "NHO-0392", eyeGap: 26, mouthCurve: 3 },
+  "das-a":     { name: "Das, A.",     id: "NHO-0578", eyeGap: 22, mouthCurve: 5 },
+  "gupta-m":   { name: "Gupta, M.",  id: "NHO-0614", eyeGap: 28, mouthCurve: 2 },
+  "nair-k":    { name: "Nair, K.",   id: "NHO-0721", eyeGap: 24, mouthCurve: 6 },
+};
 
-// ─── Math utilities ───────────────────────────────────────────────────────────
+const SIZE = 96;  // Face crop size
 
-function clamp(value, min, max) {
-  return Math.max(min, Math.min(max, value));
-}
-
-function mean(values) {
-  return values.length
-    ? values.reduce(function(sum, v) { return sum + v; }, 0) / values.length
-    : 0;
-}
-
-function variance(values) {
-  var avg = mean(values);
-  return values.length
-    ? mean(values.map(function(v) { return (v - avg) * (v - avg); }))
-    : 0;
-}
-
-// ─── Image utilities ──────────────────────────────────────────────────────────
-
-function createMatrix(fill) {
-  fill = fill === undefined ? 235 : fill;
-  var SIZE = CONFIG.SIZE;
-  var out = [];
-  for (var y = 0; y < SIZE; y++) {
-    var row = [];
-    for (var x = 0; x < SIZE; x++) row.push(fill);
-    out.push(row);
-  }
-  return out;
-}
+// ─── 1. Synthetic Face Generator ─────────────────────────────────────────────
 
 /**
- * Generates a synthetic grayscale face for a given subject.
- * @param {string} subjectId
- * @param {object} [options]
- * @returns {Array} SIZE×SIZE pixel matrix
+ * Generates a SIZE×SIZE grayscale face image as a Float32Array[SIZE*SIZE].
+ * Each value is [0, 255].
  */
-function syntheticFace(subjectId, options) {
-  options = options || {};
-  var profile = SUBJECTS[subjectId];
-  if (!profile) {
-    console.error('[syntheticFace] Unknown subjectId: "' + subjectId + '"');
-    return createMatrix(128);
+function syntheticFace({
+  eyeGap = 28, mouthCurve = 2, noise = 3,
+  shiftX = 0, shiftY = 0, blink = false,
+  darker = false, lowEntropy = false,
+} = {}) {
+  const img = new Float32Array(SIZE * SIZE);
+
+  // Background gradient
+  for (let y = 0; y < SIZE; y++) {
+    for (let x = 0; x < SIZE; x++) {
+      img[y * SIZE + x] = darker ? 55 : 88 + (y / SIZE) * 28;
+    }
   }
 
-  var SIZE     = CONFIG.SIZE;
-  var lighting = options.lighting !== undefined ? options.lighting : 0;
-  var noise    = options.noise    !== undefined ? options.noise    : 0;
-  var blink    = Boolean(options.blink);
-  var image    = createMatrix(235 + lighting);
-  var cx = Math.round(SIZE / 2 + (options.shiftX || 0));
-  var cy = Math.round(SIZE / 2 + (options.shiftY || 0));
-
   // Face oval
-  for (var y = 0; y < SIZE; y++) {
-    for (var x = 0; x < SIZE; x++) {
-      var nx = (x - cx) / 32;
-      var ny = (y - cy) / 40;
-      if (nx * nx + ny * ny <= 1) image[y][x] = 171 + lighting;
+  const cx = SIZE / 2 + shiftX, cy = SIZE / 2 + shiftY;
+  for (let y = 0; y < SIZE; y++) {
+    for (let x = 0; x < SIZE; x++) {
+      const nx = (x - cx) / 34, ny = (y - cy) / 42;
+      if (nx * nx + ny * ny < 1.0) {
+        img[y * SIZE + x] = darker ? 95 : (lowEntropy ? 148 : 148 + y * 0.22);
+      }
     }
   }
 
   // Eyes
-  var eyeY = cy - 13 + profile.brow;
-  var eyeXList = [cx - profile.eyeGap / 2, cx + profile.eyeGap / 2];
-  for (var ei = 0; ei < eyeXList.length; ei++) {
-    var eyeX = eyeXList[ei];
-    for (var ey = Math.floor(eyeY - 4); ey <= eyeY + 4; ey++) {
-      for (var ex = Math.floor(eyeX - 7); ex <= eyeX + 7; ex++) {
-        if (ey < 0 || ey >= SIZE || ex < 0 || ex >= SIZE) continue;
-        if (blink) {
-          if (Math.abs(ey - eyeY) <= 1) image[ey][ex] = 58;
-        } else {
-          var enx = (ex - eyeX) / 6;
-          var eny = (ey - eyeY) / 3;
-          if (enx * enx + eny * eny <= 1) image[ey][ex] = 42;
+  for (const side of [-1, 1]) {
+    const ex = cx + side * (eyeGap / 2), ey = cy - 10 + shiftY;
+    const eyeHeight = blink ? 1.5 : 5;
+    for (let y = 0; y < SIZE; y++) {
+      for (let x = 0; x < SIZE; x++) {
+        const dx = x - ex, dy = y - ey;
+        if (dx * dx / 36 + dy * dy / (eyeHeight * eyeHeight) < 1) {
+          img[y * SIZE + x] = darker ? 25 : 35;
         }
       }
     }
   }
 
   // Nose
-  var noseX = cx + profile.noseOffset;
-  for (var offset = 0; offset < 12; offset++) {
-    var ny2 = cy - 5 + offset;
-    var nx2 = noseX + Math.floor(offset / 3);
-    if (ny2 >= 0 && ny2 < SIZE && nx2 >= 0 && nx2 < SIZE) image[ny2][nx2] = 116;
+  const nx2 = cx, ny2 = cy + 3;
+  for (let y = 0; y < SIZE; y++) {
+    for (let x = 0; x < SIZE; x++) {
+      if (Math.abs(x - nx2) < 4 && Math.abs(y - ny2) < 6) {
+        img[y * SIZE + x] = Math.max(0, img[y * SIZE + x] - 18);
+      }
+    }
   }
 
   // Mouth
-  var mouthY = cy + 22;
-  for (var dx = -17; dx <= 17; dx++) {
-    var my = mouthY + Math.floor((dx * dx) / 72) + profile.mouthCurve;
-    var mx = cx + dx;
-    if (my >= 0 && my < SIZE && mx >= 0 && mx < SIZE) image[my][mx] = 82;
+  for (let x = Math.floor(cx - 14); x < Math.floor(cx + 14); x++) {
+    if (x < 0 || x >= SIZE) continue;
+    const dx = x - cx;
+    const my = Math.floor(cy + 16 + mouthCurve * (dx / 14) ** 2);
+    for (let dy = 0; dy < 4; dy++) {
+      const ry = my + dy + shiftY;
+      if (ry >= 0 && ry < SIZE) img[ry * SIZE + x] = darker ? 30 : 45;
+    }
   }
 
   // Noise
-  if (noise) {
-    for (var ny3 = 0; ny3 < SIZE; ny3++) {
-      for (var nx3 = 0; nx3 < SIZE; nx3++) {
-        var delta = ((nx3 * 17 + ny3 * 31 + noise * 13) % (2 * noise + 1)) - noise;
-        image[ny3][nx3] = clamp(image[ny3][nx3] + delta, 0, 255);
+  if (noise > 0 && !lowEntropy) {
+    for (let i = 0; i < SIZE * SIZE; i++) {
+      const rng = ((i * 17 + noise * 31) % (2 * noise + 1)) - noise;
+      img[i] = Math.max(0, Math.min(255, img[i] + rng));
+    }
+  }
+
+  return img;
+}
+
+/** Convert a Float32Array face to a 2D array of rows (for feature functions) */
+function toRows(img) {
+  const rows = [];
+  for (let y = 0; y < SIZE; y++) {
+    rows.push(Array.from(img.subarray(y * SIZE, (y + 1) * SIZE)));
+  }
+  return rows;
+}
+
+// ─── 2. Image Operations ─────────────────────────────────────────────────────
+
+function mean(arr) {
+  if (!arr.length) return 0;
+  return arr.reduce((s, v) => s + v, 0) / arr.length;
+}
+
+function variance(arr) {
+  if (arr.length < 2) return 0;
+  const m = mean(arr);
+  return arr.reduce((s, v) => s + (v - m) ** 2, 0) / arr.length;
+}
+
+function laplacianVariance(rows) {
+  const h = rows.length, w = rows[0].length;
+  let sum = 0, n = 0;
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      const lap = -4 * rows[y][x] + rows[y-1][x] + rows[y+1][x] + rows[y][x-1] + rows[y][x+1];
+      sum += lap * lap;
+      n++;
+    }
+  }
+  return n > 0 ? sum / n : 0;
+}
+
+function blurScore(rows) {
+  const lv = laplacianVariance(rows);
+  return Math.min(1.0, lv / 500.0);
+}
+
+function brightScore(rows) {
+  let sum = 0, n = 0;
+  for (const row of rows) for (const p of row) { sum += p; n++; }
+  const mean_b = n > 0 ? sum / n : 128;
+  const sigma = 60;
+  return Math.exp(-((mean_b - 140) ** 2) / (2 * sigma ** 2));
+}
+
+function imageQuality(rows) {
+  const blur = blurScore(rows);
+  const brightness = brightScore(rows);
+  return blur * 0.6 + brightness * 0.4;
+}
+
+// ─── 3. LBP + Gabor Feature Extraction ──────────────────────────────────────
+
+const UNIFORM_LBP = (() => {
+  const lookup = new Uint8Array(256);
+  let nextBin = 0;
+  const assigned = {};
+  for (let code = 0; code < 256; code++) {
+    const bits = Array.from({ length: 8 }, (_, i) => (code >> i) & 1);
+    const transitions = bits.filter((b, i) => b !== bits[(i + 1) % 8]).length;
+    if (transitions <= 2) {
+      if (!(code in assigned)) { assigned[code] = nextBin++; }
+      lookup[code] = assigned[code];
+    } else {
+      lookup[code] = 58;
+    }
+  }
+  return lookup;
+})();
+
+function extractLBPGabor(rows, gridX = 8, gridY = 8) {
+  const h = rows.length, w = rows[0].length;
+
+  // LBP codes
+  const codes = [];
+  const neighbors = [[-1,-1],[0,-1],[1,-1],[1,0],[1,1],[0,1],[-1,1],[-1,0]];
+  for (let y = 1; y < h - 1; y++) {
+    const row = [];
+    for (let x = 1; x < w - 1; x++) {
+      const center = rows[y][x];
+      let code = 0;
+      for (let k = 0; k < 8; k++) {
+        const [dx, dy] = neighbors[k];
+        if (rows[y + dy][x + dx] >= center) code |= 1 << k;
       }
+      row.push(UNIFORM_LBP[code]);
     }
+    codes.push(row);
   }
 
-  return image.map(function(row) { return row.map(function(p) { return clamp(p, 0, 255); }); });
-}
+  // Spatial grid LBP histogram
+  const cellW = Math.max(1, Math.floor((w - 2) / gridX));
+  const cellH = Math.max(1, Math.floor((h - 2) / gridY));
+  const lbpFeatures = [];
 
-function resizeImage(image, width, height) {
-  var srcH   = image.length;
-  var srcW   = image[0].length;
-  var xScale = (srcW - 1) / Math.max(1, width  - 1);
-  var yScale = (srcH - 1) / Math.max(1, height - 1);
-  var out    = [];
-  for (var y = 0; y < height; y++) {
-    var srcY = y * yScale;
-    var y0   = Math.floor(srcY);
-    var y1   = Math.min(y0 + 1, srcH - 1);
-    var wy   = srcY - y0;
-    var row  = [];
-    for (var x = 0; x < width; x++) {
-      var srcX   = x * xScale;
-      var x0     = Math.floor(srcX);
-      var x1     = Math.min(x0 + 1, srcW - 1);
-      var wx     = srcX - x0;
-      var top    = image[y0][x0] * (1 - wx) + image[y0][x1] * wx;
-      var bottom = image[y1][x0] * (1 - wx) + image[y1][x1] * wx;
-      row.push(Math.round(top * (1 - wy) + bottom * wy));
-    }
-    out.push(row);
-  }
-  return out;
-}
-
-function equalize(image) {
-  var hist = [];
-  for (var i = 0; i < 256; i++) hist.push(0);
-  image.forEach(function(row) { row.forEach(function(p) { hist[p]++; }); });
-  var total   = image.length * image[0].length;
-  var running = 0;
-  var cdf     = hist.map(function(count) { running += count; return running; });
-  var cdfMin  = 0;
-  for (var j = 0; j < cdf.length; j++) { if (cdf[j] > 0) { cdfMin = cdf[j]; break; } }
-  var denominator = total - cdfMin;
-  if (denominator <= 0) return image.map(function(row) { return row.slice(); });
-  var lut = cdf.map(function(v) { return clamp(Math.round(((v - cdfMin) * 255) / denominator), 0, 255); });
-  return image.map(function(row) { return row.map(function(p) { return lut[p]; }); });
-}
-
-function normalizeImage(image) {
-  var SIZE = CONFIG.SIZE;
-  return equalize(resizeImage(image, SIZE, SIZE));
-}
-
-// ─── Feature extraction ───────────────────────────────────────────────────────
-
-function uniformBin(code) {
-  var transitions = 0;
-  var prev = code & 1;
-  for (var i = 1; i < 8; i++) {
-    var bit = (code >> i) & 1;
-    if (bit !== prev) transitions++;
-    prev = bit;
-  }
-  if (prev !== (code & 1)) transitions++;
-  return transitions <= 2 ? code % CONFIG.LBP_BINS : CONFIG.LBP_BINS;
-}
-
-function lbpFeatures(image) {
-  var SIZE      = CONFIG.SIZE;
-  var LBP_GRID  = CONFIG.LBP_GRID;
-  var LBP_BINS  = CONFIG.LBP_BINS;
-  var cell      = Math.floor((SIZE - 2) / LBP_GRID);
-  var hists     = [];
-  var NEIGHBORS = [[-1,-1],[0,-1],[1,-1],[1,0],[1,1],[0,1],[-1,1],[-1,0]];
-
-  var codes = [];
-  for (var cy = 0; cy < SIZE - 2; cy++) {
-    var codeRow = [];
-    for (var cx = 0; cx < SIZE - 2; cx++) codeRow.push(0);
-    codes.push(codeRow);
-  }
-
-  for (var y = 1; y < SIZE - 1; y++) {
-    for (var x = 1; x < SIZE - 1; x++) {
-      var code = 0;
-      for (var ni = 0; ni < NEIGHBORS.length; ni++) {
-        var dx = NEIGHBORS[ni][0];
-        var dy = NEIGHBORS[ni][1];
-        if (image[y + dy][x + dx] >= image[y][x]) code |= 1 << ni;
+  for (let gy = 0; gy < gridY; gy++) {
+    for (let gx = 0; gx < gridX; gx++) {
+      const hist = new Float64Array(59);
+      const x0 = gx * cellW, y0 = gy * cellH;
+      const x1 = gx < gridX - 1 ? x0 + cellW : w - 2;
+      const y1 = gy < gridY - 1 ? y0 + cellH : h - 2;
+      for (let y = y0; y < y1; y++) {
+        for (let x = x0; x < x1; x++) {
+          hist[codes[y][x]]++;
+        }
       }
-      codes[y - 1][x - 1] = uniformBin(code);
+      const total = hist.reduce((s, v) => s + v, 0) || 1;
+      for (let b = 0; b < 59; b++) lbpFeatures.push(hist[b] / total);
     }
   }
 
-  for (var gy = 0; gy < LBP_GRID; gy++) {
-    for (var gx = 0; gx < LBP_GRID; gx++) {
-      var hist   = [];
-      for (var hi = 0; hi <= LBP_BINS; hi++) hist.push(0);
-      var startX = gx * cell;
-      var startY = gy * cell;
-      var endX   = gx < LBP_GRID - 1 ? (gx + 1) * cell : SIZE - 2;
-      var endY   = gy < LBP_GRID - 1 ? (gy + 1) * cell : SIZE - 2;
-      for (var hy = startY; hy < endY; hy++) {
-        for (var hx = startX; hx < endX; hx++) hist[codes[hy][hx]]++;
+  // Gabor features (4 orientations × 2 frequencies)
+  const orientations = [0, Math.PI / 4, Math.PI / 2, (3 * Math.PI) / 4];
+  const frequencies = [0.1, 0.2];
+  const gaborFeats = [];
+
+  for (const freq of frequencies) {
+    for (const theta of orientations) {
+      const kSize = 7, sigma = 2.5;
+      const cosT = Math.cos(theta), sinT = Math.sin(theta);
+      const half = Math.floor(kSize / 2);
+
+      let responses = [];
+      for (let y = half; y < h - half; y += 3) {
+        for (let x = half; x < w - half; x += 3) {
+          let resp = 0;
+          for (let ky = -half; ky <= half; ky++) {
+            for (let kx = -half; kx <= half; kx++) {
+              const xr = kx * cosT + ky * sinT;
+              const yr = -kx * sinT + ky * cosT;
+              const gauss = Math.exp(-(xr ** 2 + yr ** 2) / (2 * sigma ** 2));
+              const wave = Math.cos(2 * Math.PI * freq * xr);
+              const kernel = gauss * wave / (2 * Math.PI * sigma ** 2);
+              resp += rows[y + ky][x + kx] * kernel;
+            }
+          }
+          responses.push(resp);
+        }
       }
-      var total = hist.reduce(function(s, v) { return s + v; }, 0) || 1;
-      hist.forEach(function(v) { hists.push(v / total); });
+      if (!responses.length) responses = [0];
+      gaborFeats.push(mean(responses));
+      gaborFeats.push(Math.sqrt(variance(responses)));
     }
   }
-  return hists;
-}
 
-function regionCentroid(image, region) {
-  var SIZE   = CONFIG.SIZE;
-  var left   = Math.round(region[0] * SIZE);
-  var top    = Math.round(region[1] * SIZE);
-  var right  = Math.round(region[2] * SIZE);
-  var bottom = Math.round(region[3] * SIZE);
-  var total = 0, xSum = 0, ySum = 0;
-  for (var y = top; y < bottom; y++) {
-    for (var x = left; x < right; x++) {
-      var weight = Math.max(0, 80 - image[y][x]);
-      total += weight;
-      xSum  += x * weight;
-      ySum  += y * weight;
+  // Appearance features (24×24 downsampled mean grid)
+  const appSize = 24;
+  const scaleX = w / appSize, scaleY = h / appSize;
+  const appearance = [];
+  for (let ay = 0; ay < appSize; ay++) {
+    let rowMean = 0;
+    for (let ax = 0; ax < appSize; ax++) {
+      const sy = Math.min(h - 1, Math.round(ay * scaleY));
+      const sx = Math.min(w - 1, Math.round(ax * scaleX));
+      appearance.push(rows[sy][sx] / 255);
+      rowMean += rows[sy][sx] / 255;
     }
+    appearance.push(rowMean / appSize);
   }
-  if (!total) return [(region[0] + region[2]) / 2, (region[1] + region[3]) / 2, 0];
-  return [
-    xSum / total / (SIZE - 1),
-    ySum / total / (SIZE - 1),
-    total / ((right - left) * (bottom - top) * 80),
-  ];
-}
 
-function appearanceFeatures(image) {
-  var small    = resizeImage(image, 24, 24);
-  var features = [];
-  small.forEach(function(row) { row.forEach(function(p) { features.push(p / 255); }); });
-  small.forEach(function(row) { features.push(mean(row) / 255); });
-  for (var x = 0; x < 24; x++) {
-    features.push(mean(small.map(function(row) { return row[x]; })) / 255);
-  }
-  return features;
-}
-
-function geometryFeatures(image) {
-  var REGIONS = [
+  // Geometry features (dark-region centroids)
+  const regions = [
     [0.18, 0.23, 0.48, 0.48],
     [0.52, 0.23, 0.82, 0.48],
     [0.25, 0.55, 0.75, 0.86],
-    [0.38, 0.35, 0.62, 0.65],
   ];
-  var points   = REGIONS.map(function(r) { return regionCentroid(image, r); });
-  var features = [];
-  points.forEach(function(p) { p.forEach(function(v) { features.push(v); }); });
-  var leftEye    = points[0];
-  var rightEye   = points[1];
-  var mouth      = points[2];
-  var nose       = points[3];
-  var eyeCenterX = (leftEye[0] + rightEye[0]) / 2;
-  var eyeCenterY = (leftEye[1] + rightEye[1]) / 2;
-  features.push(rightEye[0] - leftEye[0], mouth[1] - eyeCenterY, nose[0] - eyeCenterX);
-  return features;
-}
-
-function extractTemplate(image) {
-  var normalized = normalizeImage(image);
-  return lbpFeatures(normalized).concat(appearanceFeatures(normalized)).concat(geometryFeatures(normalized));
-}
-
-// ─── Similarity & scoring ─────────────────────────────────────────────────────
-
-function chiSquare(left, right) {
-  var sum = 0;
-  for (var i = 0; i < left.length; i++) {
-    sum += (left[i] - right[i]) * (left[i] - right[i]) / (left[i] + right[i] + 1e-12);
-  }
-  return 0.5 * sum;
-}
-
-function rms(left, right) {
-  return Math.sqrt(mean(left.map(function(v, i) { return (v - right[i]) * (v - right[i]); })));
-}
-
-function featureDistance(left, right) {
-  var LBP_GRID  = CONFIG.LBP_GRID;
-  var LBP_BINS  = CONFIG.LBP_BINS;
-  var W         = CONFIG.DISTANCE_WEIGHTS;
-  var lbpEnd    = (LBP_BINS + 1) * LBP_GRID * LBP_GRID;
-  var appEnd    = lbpEnd + 24 * 24 + 48;
-  var lbp = chiSquare(left.slice(0, lbpEnd), right.slice(0, lbpEnd)) / 64;
-  var app = rms(left.slice(lbpEnd, appEnd),  right.slice(lbpEnd, appEnd));
-  var geo = rms(left.slice(appEnd),           right.slice(appEnd));
-  return W.lbp * lbp + W.appearance * app + W.geometry * geo;
-}
-
-// ─── Liveness assessment ──────────────────────────────────────────────────────
-
-function laplacianVariance(image) {
-  var SIZE   = CONFIG.SIZE;
-  var values = [];
-  for (var y = 1; y < SIZE - 1; y++) {
-    for (var x = 1; x < SIZE - 1; x++) {
-      values.push(-4 * image[y][x] + image[y-1][x] + image[y+1][x] + image[y][x-1] + image[y][x+1]);
+  const geometry = [];
+  for (const [x0r, y0r, x1r, y1r] of regions) {
+    const rx0 = Math.floor(x0r * w), ry0 = Math.floor(y0r * h);
+    const rx1 = Math.ceil(x1r * w), ry1 = Math.ceil(y1r * h);
+    let tw = 0, sx = 0, sy = 0;
+    for (let y = ry0; y < ry1; y++) {
+      for (let x = rx0; x < rx1; x++) {
+        const wt = Math.max(0, 80 - rows[y][x]);
+        tw += wt; sx += x * wt; sy += y * wt;
+      }
+    }
+    if (tw > 0) {
+      geometry.push(sx / tw / w, sy / tw / h, tw / ((rx1 - rx0) * (ry1 - ry0) * 80));
+    } else {
+      geometry.push(0.5, 0.5, 0);
     }
   }
-  return variance(values);
-}
-
-function imageEntropy(image) {
-  var hist = [];
-  for (var i = 0; i < 256; i++) hist.push(0);
-  image.forEach(function(row) { row.forEach(function(p) { hist[p]++; }); });
-  var total = image.length * image[0].length;
-  return hist.reduce(function(score, count) {
-    if (!count) return score;
-    var p = count / total;
-    return score - p * Math.log2(p);
-  }, 0) / 8;
-}
-
-function meanAbsDiff(left, right) {
-  var SIZE   = CONFIG.SIZE;
-  var values = [];
-  for (var y = 0; y < SIZE; y++) {
-    for (var x = 0; x < SIZE; x++) values.push(Math.abs(left[y][x] - right[y][x]) / 255);
+  // Eye distance, mouth offset
+  if (geometry.length >= 6) {
+    geometry.push(geometry[3] - geometry[0], geometry[7] - geometry[1], geometry[6] - (geometry[0] + geometry[3]) / 2);
   }
-  return mean(values);
+
+  return Float64Array.from([...lbpFeatures, ...gaborFeats, ...appearance, ...geometry]);
 }
 
-function cropImage(image, x0, y0, x1, y1) {
-  var SIZE   = CONFIG.SIZE;
-  var left   = Math.round(x0 * SIZE);
-  var top    = Math.round(y0 * SIZE);
-  var right  = Math.round(x1 * SIZE);
-  var bottom = Math.round(y1 * SIZE);
-  return image.slice(top, bottom).map(function(row) { return row.slice(left, right); });
-}
+// ─── 4. Online PCA Whitener ───────────────────────────────────────────────────
 
-function eyeOpenness(image) {
-  var pixels = cropImage(image, 0.22, 0.27, 0.45, 0.45).concat(cropImage(image, 0.55, 0.27, 0.78, 0.45));
-  var flat   = [];
-  pixels.forEach(function(row) { row.forEach(function(p) { flat.push(p / 255); }); });
-  var darkRatio = flat.filter(function(p) { return p < 0.32; }).length / flat.length;
-  return darkRatio + 0.35 * variance(flat);
-}
+class OnlinePCAWhitener {
+  constructor(dim, smoothing = 1e-5) {
+    this.dim = dim;
+    this.smoothing = smoothing;
+    this.n = 0;
+    this.mean_ = new Float64Array(dim);
+    this.M2 = new Float64Array(dim);
+  }
 
-function weightedCentroid(image) {
-  var SIZE  = CONFIG.SIZE;
-  var total = 0, xSum = 0, ySum = 0;
-  for (var y = 0; y < SIZE; y++) {
-    for (var x = 0; x < SIZE; x++) {
-      var weight = Math.max(0, 255 - image[y][x]);
-      total += weight;
-      xSum  += x * weight;
-      ySum  += y * weight;
+  update(vec) {
+    this.n++;
+    for (let i = 0; i < this.dim; i++) {
+      const delta = vec[i] - this.mean_[i];
+      this.mean_[i] += delta / this.n;
+      const delta2 = vec[i] - this.mean_[i];
+      this.M2[i] += delta * delta2;
     }
   }
-  if (!total) return [0.5, 0.5];
-  return [xSum / total / (SIZE - 1), ySum / total / (SIZE - 1)];
+
+  whiten(vec) {
+    if (this.n < 2) return vec;
+    const out = new Float64Array(this.dim);
+    for (let i = 0; i < this.dim; i++) {
+      const sigma = Math.sqrt(this.M2[i] / (this.n - 1) + this.smoothing);
+      out[i] = (vec[i] - this.mean_[i]) / sigma;
+    }
+    return out;
+  }
 }
 
-function windowScore(value, tooLow, idealLow, idealHigh, tooHigh) {
-  if (value <= tooLow || value >= tooHigh) return 0;
-  if (value >= idealLow && value <= idealHigh) return 1;
-  if (value < idealLow) return (value - tooLow) / (idealLow - tooLow);
-  return (tooHigh - value) / (tooHigh - idealHigh);
+// ─── 5. Similarity Metrics ────────────────────────────────────────────────────
+
+function cosineSimilarity(a, b) {
+  let dot = 0, na = 0, nb = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    na += a[i] * a[i];
+    nb += b[i] * b[i];
+  }
+  const denom = Math.sqrt(na) * Math.sqrt(nb);
+  if (denom < 1e-10) return 0;
+  return (dot / denom + 1) / 2; // Map [-1,1] → [0,1]
 }
 
-function rangeScore(value, low, high) {
-  if (value <= low)  return 0;
-  if (value >= high) return 1;
-  return (value - low) / (high - low);
+function chiSquareDist(a, b) {
+  let d = 0;
+  for (let i = 0; i < a.length; i++) {
+    const sum = a[i] + b[i] + 1e-12;
+    d += (a[i] - b[i]) ** 2 / sum;
+  }
+  return 0.5 * d;
 }
 
-function directionScore(delta) {
-  if (delta <= 0.015) return 0;
-  if (delta >= 0.075) return 1;
-  return (delta - 0.015) / 0.06;
+function similarity(a, b, metric) {
+  if (metric === "cosine") return cosineSimilarity(a, b);
+  const dist = chiSquareDist(a.slice(0, 59 * 64), b.slice(0, 59 * 64));
+  return 1 / (1 + dist / 64);
 }
 
-function blinkScore(frames) {
-  var openness    = frames.map(eyeOpenness);
-  var peak        = Math.max.apply(null, openness);
-  var valley      = Math.min.apply(null, openness);
-  var valleyIndex = openness.indexOf(valley);
-  var leftPeak    = Math.max.apply(null, openness.slice(0, valleyIndex));
-  var rightPeak   = Math.max.apply(null, openness.slice(valleyIndex + 1));
-  var recovery =
-    valleyIndex > 0 &&
-    valleyIndex < openness.length - 1 &&
-    leftPeak  - valley > 0.012 &&
-    rightPeak - valley > 0.012;
-  return recovery ? clamp((peak - valley) / 0.035, 0, 1) : 0;
+// ─── 6. Adaptive EER Threshold ────────────────────────────────────────────────
+
+class AdaptiveThreshold {
+  constructor(staticThr = 0.40, windowSize = 200, minSamples = 5) {
+    this.static_ = staticThr;
+    this.window = windowSize;
+    this.minSamples = minSamples;
+    this.genuine = [];
+    this.impostor = [];
+  }
+
+  record(score, isGenuine) {
+    const bucket = isGenuine ? this.genuine : this.impostor;
+    bucket.push(score);
+    if (bucket.length > this.window) bucket.shift();
+  }
+
+  get threshold() {
+    if (this.genuine.length < this.minSamples || this.impostor.length < this.minSamples) {
+      return this.static_;
+    }
+    const all = [...this.genuine, ...this.impostor];
+    const lo = Math.min(...all), hi = Math.max(...all);
+    if (lo >= hi) return this.static_;
+
+    let bestT = this.static_, bestDiff = Infinity;
+    for (let step = 0; step <= 50; step++) {
+      const t = lo + (hi - lo) * step / 50;
+      const far = this.impostor.filter(s => s >= t).length / this.impostor.length;
+      const frr = this.genuine.filter(s => s < t).length / this.genuine.length;
+      const diff = Math.abs(far - frr);
+      if (diff < bestDiff) { bestDiff = diff; bestT = t; }
+    }
+    return bestT;
+  }
+
+  get eer() {
+    const t = this.threshold;
+    if (this.genuine.length < this.minSamples || this.impostor.length < this.minSamples) return null;
+    const far = this.impostor.filter(s => s >= t).length / this.impostor.length;
+    const frr = this.genuine.filter(s => s < t).length / this.genuine.length;
+    return (far + frr) / 2;
+  }
 }
 
-/**
- * Assess liveness from a sequence of raw frames.
- * BUG FIX: `passed` is evaluated independently from reasons array,
- * preventing double-counting of "liveness below threshold".
- */
-function assessLiveness(rawFrames, challenge) {
-  var LW      = CONFIG.LIVENESS_WEIGHTS;
-  var frames  = rawFrames.map(normalizeImage);
-  var diffs   = frames.slice(1).map(function(frame, i) { return meanAbsDiff(frames[i], frame); });
-  var brightness  = frames.map(function(f) { return mean(f.map(function(row) { return mean(row.map(function(p) { return p / 255; })); })); });
-  var centroids   = frames.map(weightedCentroid);
-  var xVals       = centroids.map(function(c) { return c[0]; });
-  var yVals       = centroids.map(function(c) { return c[1]; });
-  var xShift      = Math.max.apply(null, xVals) - Math.min.apply(null, xVals);
-  var yShift      = Math.max.apply(null, yVals) - Math.min.apply(null, yVals);
-  var texture     = mean(frames.map(laplacianVariance));
-  var entropyScore = mean(frames.map(imageEntropy));
-  var motion      = mean(diffs);
-  var exposureVariance = variance(brightness);
-  var blink       = blinkScore(frames);
+// ─── 7. Score Fusion ──────────────────────────────────────────────────────────
 
-  var challengeValue = 0;
-  if (challenge === "blink")     challengeValue = blink;
-  if (challenge === "turn_left") challengeValue = directionScore(centroids[centroids.length - 1][0] - centroids[0][0]);
-  if (challenge === "static")    challengeValue = motion < 0.004 ? 0 : 0.15;
+function fuse(recSim, liveSim, method, thr) {
+  let fused;
+  if (method === "cosine") {
+    fused = 0.60 * recSim + 0.40 * liveSim;
+  } else if (method === "weighted") {
+    // geometric (weighted product)
+    fused = Math.exp(0.60 * Math.log(Math.max(1e-10, recSim)) + 0.40 * Math.log(Math.max(1e-10, liveSim)));
+  } else {
+    // min
+    fused = Math.min(recSim, liveSim);
+  }
+  return { fused, accepted: fused >= thr };
+}
 
-  var weighted =
-    rangeScore(texture,          35,      360)   * LW.texture +
-    rangeScore(entropyScore,     0.45,    0.92)  * LW.entropy +
-    windowScore(motion,          0.004,   0.018,  0.16, 0.38) * LW.motion +
-    windowScore(exposureVariance, 0.00001, 0.0003, 0.035, 0.12) * LW.exposureVariance +
-    challengeValue * LW.challenge;
+// ─── 8. Liveness Engine ───────────────────────────────────────────────────────
 
-  var score = clamp(weighted / LW.normalizer, 0, 1);
+function weightedCentroid(rows) {
+  let tw = 0, sx = 0, sy = 0;
+  const h = rows.length, w = rows[0].length;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const wt = Math.max(0, 80 - rows[y][x]);
+      tw += wt; sx += x * wt; sy += y * wt;
+    }
+  }
+  return tw > 0 ? [sx / tw / w, sy / tw / h] : [0.5, 0.5];
+}
 
-  // FIX: independent evaluation — reasons don't affect `passed`
-  var challengePassed = challengeValue >= CONFIG.CHALLENGE_PASS_THRESHOLD;
-  var passed          = score >= CONFIG.LIVENESS_THRESHOLD && challengePassed;
+function multiScaleLBPEntropy(rows) {
+  const hist = {};
+  const h = rows.length, w = rows[0].length;
+  for (const radius of [1, 2, 3]) {
+    const offsets = [[-radius,-radius],[0,-radius],[radius,-radius],[radius,0],[radius,radius],[0,radius],[-radius,radius],[-radius,0]];
+    for (let y = radius; y < h - radius; y++) {
+      for (let x = radius; x < w - radius; x++) {
+        const center = rows[y][x];
+        let code = 0;
+        for (let k = 0; k < 8; k++) {
+          const [dy, dx] = offsets[k];
+          if (rows[y + dy][x + dx] >= center) code |= 1 << k;
+        }
+        hist[code] = (hist[code] || 0) + 1;
+      }
+    }
+  }
+  const total = Object.values(hist).reduce((s, v) => s + v, 0) || 1;
+  let e = 0;
+  for (const count of Object.values(hist)) {
+    const p = count / total;
+    if (p > 0) e -= p * Math.log2(p);
+  }
+  return e / 8;
+}
 
-  var reasons = [];
-  if (motion < 0.004)    reasons.push("insufficient motion");
-  if (texture < 35)      reasons.push("low texture detail");
-  if (!challengePassed)  reasons.push("challenge failed");
-  if (score < CONFIG.LIVENESS_THRESHOLD) reasons.push("liveness below threshold");
+function symmetryScore(rows) {
+  const h = rows.length, w = rows[0].length;
+  const mid = Math.floor(w / 2);
+  let diff = 0, n = 0;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < mid; x++) {
+      diff += Math.abs(rows[y][x] - rows[y][w - 1 - x]) / 255;
+      n++;
+    }
+  }
+  const asymmetry = n > 0 ? diff / n : 0;
+  return Math.max(0, 1 - asymmetry * 5);
+}
+
+function opticalFlowArc(frameRows) {
+  const centroids = frameRows.map(rows => weightedCentroid(rows));
+  let arc = 0;
+  for (let i = 1; i < centroids.length; i++) {
+    const dx = centroids[i][0] - centroids[i-1][0];
+    const dy = centroids[i][1] - centroids[i-1][1];
+    arc += Math.sqrt(dx * dx + dy * dy);
+  }
+  if (centroids.length >= 3) {
+    const dirs = [];
+    for (let i = 1; i < centroids.length; i++) {
+      dirs.push(Math.atan2(centroids[i][1] - centroids[i-1][1], centroids[i][0] - centroids[i-1][0]));
+    }
+    const dirVar = variance(dirs);
+    arc *= (1 + dirVar * 5);
+  }
+  return arc / Math.max(1, centroids.length - 1);
+}
+
+function assessLiveness(frames, challenge) {
+  const frameRows = frames.map(toRows);
+
+  const textures = frameRows.map(laplacianVariance);
+  const diffs = frameRows.slice(1).map((r, i) => {
+    let sum = 0, n = 0;
+    for (let y = 0; y < r.length; y++) {
+      for (let x = 0; x < r[0].length; x++) {
+        sum += Math.abs(r[y][x] - frameRows[i][y][x]);
+        n++;
+      }
+    }
+    return n > 0 ? sum / n / 255 : 0;
+  });
+
+  const texture = mean(textures);
+  const motion = mean(diffs);
+  const msEntropy = mean(frameRows.map(multiScaleLBPEntropy));
+  const symm = mean(frameRows.map(symmetryScore));
+  const flowArc = opticalFlowArc(frameRows);
+
+  // Challenge score
+  let challengeScore = 1.0;
+  if (challenge === "blink") {
+    challengeScore = frames.length > 2 ? Math.min(1.0, motion * 8) : 0;
+  } else if (challenge === "turn_left" || challenge === "turn_right") {
+    const centroids = frameRows.map(weightedCentroid);
+    const shift = Math.abs(centroids.at(-1)[0] - centroids[0][0]);
+    challengeScore = Math.min(1.0, shift / 0.05);
+  } else if (challenge === "nod") {
+    const centroids = frameRows.map(weightedCentroid);
+    const shift = Math.abs(centroids.at(-1)[1] - centroids[0][1]);
+    challengeScore = Math.min(1.0, shift / 0.04);
+  } else if (challenge === "smile") {
+    challengeScore = Math.min(1.0, motion * 5);
+  }
+
+  // Scores
+  const textureScore = texture > 35 ? Math.min(1.0, (texture - 35) / 325) : 0;
+  const motionScore = motion < 0.004 ? 0 : motion > 0.38 ? 0 : motion < 0.018 ? (motion - 0.004) / 0.014 : motion < 0.16 ? 1 : (0.38 - motion) / 0.22;
+  const entropyScore = msEntropy > 0.45 ? Math.min(1.0, (msEntropy - 0.45) / 0.4) : 0;
+  const symmetryS = symm > 0.40 ? Math.min(1.0, (symm - 0.40) / 0.48) : 0;
+  const flowScore = flowArc > 0.005 ? Math.min(1.0, (flowArc - 0.005) / 0.145) : 0;
+
+  const weights = [
+    [textureScore, 0.20], [motionScore, 0.28], [entropyScore, 0.12],
+    [symmetryS, 0.08], [flowScore, 0.10],
+  ];
+  if (challenge) weights.push([challengeScore, 0.30]);
+
+  const totalWeight = weights.reduce((s, [, w]) => s + w, 0);
+  const score = weights.reduce((s, [v, w]) => s + v * w, 0) / totalWeight;
+
+  // Attack hint
+  let attackHint = "genuine", attackConf = 0;
+  if (motion < 0.006) {
+    attackHint = "static"; attackConf = Math.min(1, (0.006 - motion) / 0.006);
+  } else if (msEntropy < 0.35 && texture < 60) {
+    attackHint = "printed"; attackConf = 0.75;
+  } else if (msEntropy < 0.50 && challengeScore < 0.3 && symm < 0.55) {
+    attackHint = "replay"; attackConf = 0.65;
+  } else {
+    attackConf = Math.min(1, motionScore * 0.4 + entropyScore * 0.4 + symmetryS * 0.2);
+  }
+
+  const reasons = [];
+  if (motion < 0.004) reasons.push("insufficient frame-to-frame motion");
+  if (msEntropy < 0.30) reasons.push("low multi-scale texture entropy — possible printed photo");
+  if (symm < 0.35) reasons.push("low facial symmetry — possible spoofed image");
+  if (challenge && challengeScore < 0.55) reasons.push(`challenge not satisfied: ${challenge}`);
+  if (score < 0.40) reasons.push("liveness score below threshold");
 
   return {
-    score: score,
-    challengeValue: challengeValue,
-    passed: passed,
-    metrics: { texture: texture, entropy: entropyScore, motion: motion, exposureVariance: exposureVariance, xShift: xShift, yShift: yShift, blink: blink },
-    reasons: reasons,
+    score: Math.max(0, Math.min(1, score)),
+    metrics: { texture, motion, ms_lbp_entropy: msEntropy, symmetry: symm, optical_flow_arc: flowArc },
+    attackHint,
+    attackConf,
+    reasons,
   };
 }
 
-// ─── Frame generation ─────────────────────────────────────────────────────────
+// ─── 9. Per-recognizer State ──────────────────────────────────────────────────
 
-/**
- * Build synthetic frames — decoupled from DOM, params passed explicitly.
- */
-function buildFrames(subjectId, challenge, opts) {
-  opts = opts || {};
-  var lighting  = opts.lighting !== undefined ? opts.lighting : 0;
-  var jitter    = opts.jitter   !== undefined ? opts.jitter   : 4;
-  var BASE_NOISE = CONFIG.BASE_NOISE;
-  var shifts = challenge === "turn_left"
-    ? [0, jitter + 1, jitter + 3, jitter + 5, jitter + 7]
-    : [0, jitter / 2, jitter, jitter / 2, 0];
+const whitener = new OnlinePCAWhitener(59 * 64 + 16 + 24 * 24 + 24 + 9 + 6);
+const adaptiveThr = new AdaptiveThreshold(STATE.threshold);
 
-  return shifts.map(function(shift, index) {
-    return syntheticFace(subjectId, {
-      shiftX:   challenge === "static" ? 0 : shift,
-      shiftY:   challenge === "static" ? 0 : Math.sin(index) * 0.8,
-      blink:    challenge === "blink" && index === 2,
-      lighting: lighting,
-      noise:    challenge === "static" ? 0 : BASE_NOISE,
-    });
-  });
-}
+// ─── 10. Canvas Rendering ─────────────────────────────────────────────────────
 
-// ─── Identification ───────────────────────────────────────────────────────────
-
-function identify(templates, image) {
-  var vector = extractTemplate(image);
-  var ranked = templates.map(function(t) {
-    return { subjectId: t.subjectId, score: 1 / (1 + featureDistance(vector, t.vector)) };
-  }).sort(function(a, b) { return b.score - a.score; });
-
-  var bestBySubject = {};
-  ranked.forEach(function(c) {
-    if (!bestBySubject[c.subjectId]) bestBySubject[c.subjectId] = c;
-  });
-
-  var candidates = Object.keys(bestBySubject)
-    .map(function(k) { return bestBySubject[k]; })
-    .sort(function(a, b) { return b.score - a.score; });
-
-  return { vector: vector, candidates: candidates };
-}
-
-// ─── DOM helpers (XSS-safe) ───────────────────────────────────────────────────
-
-function el(tag, opts) {
-  opts = opts || {};
-  var node = document.createElement(tag);
-  if (opts.text)      node.textContent = opts.text;
-  if (opts.className) node.className   = opts.className;
-  if (opts.attrs) {
-    Object.keys(opts.attrs).forEach(function(k) { node.setAttribute(k, opts.attrs[k]); });
+function drawFace(canvas, faceImg) {
+  const ctx = canvas.getContext("2d");
+  const idata = ctx.createImageData(SIZE, SIZE);
+  for (let i = 0; i < SIZE * SIZE; i++) {
+    const v = Math.round(Math.max(0, Math.min(255, faceImg[i])));
+    idata.data[i * 4]     = v;
+    idata.data[i * 4 + 1] = v;
+    idata.data[i * 4 + 2] = v;
+    idata.data[i * 4 + 3] = 255;
   }
-  return node;
+  ctx.putImageData(idata, 0, 0);
 }
 
-// ─── Rendering ────────────────────────────────────────────────────────────────
-
-function drawMatrix(canvas, image, palette) {
-  palette = palette || "face";
-  var SIZE      = CONFIG.SIZE;
-  var ctx       = canvas.getContext("2d");
-  var imageData = ctx.createImageData(SIZE, SIZE);
-  var data      = imageData.data;
-  for (var y = 0; y < SIZE; y++) {
-    for (var x = 0; x < SIZE; x++) {
-      var pixel = image[y][x];
-      var idx   = (y * SIZE + x) * 4;
-      if (palette === "face") {
-        data[idx]     = clamp(pixel - 8, 0, 255);
-        data[idx + 1] = clamp(pixel + 5, 0, 255);
-        data[idx + 2] = clamp(pixel - 1, 0, 255);
-      } else {
-        data[idx]     = clamp(30  + pixel * 0.40, 0, 255);
-        data[idx + 1] = clamp(90  + pixel * 0.45, 0, 255);
-        data[idx + 2] = clamp(116 + pixel * 0.35, 0, 255);
-      }
-      data[idx + 3] = 255;
-    }
+function drawMiniFrame(canvas, faceImg) {
+  const size = faceImg.length === SIZE * SIZE ? SIZE : Math.sqrt(faceImg.length);
+  const ctx = canvas.getContext("2d");
+  canvas.width = size; canvas.height = size;
+  const idata = ctx.createImageData(size, size);
+  for (let i = 0; i < size * size; i++) {
+    const v = Math.round(Math.max(0, Math.min(255, faceImg[i])));
+    idata.data[i * 4] = v;
+    idata.data[i * 4 + 1] = v;
+    idata.data[i * 4 + 2] = v;
+    idata.data[i * 4 + 3] = 255;
   }
-  ctx.imageSmoothingEnabled = false;
-  ctx.putImageData(imageData, 0, 0);
-}
-
-function drawFilmstrip(filmstripEl, frames) {
-  var SIZE = CONFIG.SIZE;
-  filmstripEl.innerHTML = "";
-  frames.forEach(function(frame, index) {
-    var canvas = document.createElement("canvas");
-    canvas.width  = SIZE;
-    canvas.height = SIZE;
-    canvas.setAttribute("aria-label", "Frame " + (index + 1) + " of " + frames.length);
-    canvas.setAttribute("role", "img");
-    drawMatrix(canvas, frame, "trace");
-    filmstripEl.appendChild(canvas);
-  });
+  ctx.putImageData(idata, 0, 0);
 }
 
 function drawVector(canvas, vector) {
-  var ctx    = canvas.getContext("2d");
-  var width  = canvas.offsetWidth  || canvas.width;
-  var height = canvas.offsetHeight || canvas.height;
-  canvas.width  = width;
-  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  const w = canvas.offsetWidth || 360, h = 100;
+  canvas.width = w; canvas.height = h;
+  ctx.clearRect(0, 0, w, h);
 
-  var style  = getComputedStyle(document.documentElement);
-  var bgColor = style.getPropertyValue("--color-surface-2").trim() || "#f8faf8";
+  const n = Math.min(vector.length, 800);
+  const barW = w / n;
+  const maxV = Math.max(...Array.from(vector).slice(0, n).map(Math.abs)) || 1;
 
-  ctx.clearRect(0, 0, width, height);
-  ctx.fillStyle = bgColor;
-  ctx.fillRect(0, 0, width, height);
+  for (let i = 0; i < n; i++) {
+    const val = vector[i] / maxV;
+    const barH = Math.abs(val) * (h / 2);
+    const hue = val > 0 ? 160 : 0;  // green positive, red negative
+    const sat = 70 + Math.abs(val) * 30;
+    ctx.fillStyle = `hsla(${hue}, ${sat}%, 55%, 0.85)`;
+    if (val > 0) ctx.fillRect(i * barW, h / 2 - barH, Math.max(1, barW - 0.5), barH);
+    else         ctx.fillRect(i * barW, h / 2,         Math.max(1, barW - 0.5), barH);
+  }
 
-  ctx.strokeStyle = style.getPropertyValue("--color-border").trim() || "#d8e0d7";
+  // Centre line
+  ctx.strokeStyle = "rgba(255,255,255,0.08)";
   ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0, h / 2); ctx.lineTo(w, h / 2); ctx.stroke();
+}
+
+function drawDistribution(canvas, genuineScores, impostorScores, thr) {
+  const ctx = canvas.getContext("2d");
+  const W = canvas.offsetWidth || 360, H = 160;
+  canvas.width = W; canvas.height = H;
+  ctx.clearRect(0, 0, W, H);
+
+  const bins = 20;
+  function histogram(scores) {
+    const h = new Float32Array(bins);
+    for (const s of scores) {
+      const idx = Math.min(bins - 1, Math.floor(s * bins));
+      h[idx]++;
+    }
+    const max = Math.max(...h) || 1;
+    return Array.from(h).map(v => v / max);
+  }
+
+  const gh = histogram(genuineScores);
+  const ih = histogram(impostorScores);
+  const barW = (W - 20) / bins;
+
+  // Bars
+  for (let i = 0; i < bins; i++) {
+    const x = 10 + i * barW;
+    ctx.fillStyle = "rgba(0,229,160,0.35)";
+    ctx.fillRect(x, H - 30 - gh[i] * (H - 40), barW - 2, gh[i] * (H - 40));
+    ctx.fillStyle = "rgba(255,77,106,0.35)";
+    ctx.fillRect(x + 1, H - 30 - ih[i] * (H - 40), barW - 2, ih[i] * (H - 40));
+  }
+
+  // Threshold line
+  const tx = 10 + thr * (W - 20);
+  ctx.strokeStyle = "rgba(56,182,255,0.7)";
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([4, 4]);
+  ctx.beginPath(); ctx.moveTo(tx, 0); ctx.lineTo(tx, H - 30); ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Axis
+  ctx.strokeStyle = "rgba(255,255,255,0.08)";
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(10, H - 30); ctx.lineTo(W - 10, H - 30); ctx.stroke();
+}
+
+function drawTimeline(canvas, events, thr) {
+  const ctx = canvas.getContext("2d");
+  const W = canvas.offsetWidth || 360, H = 160;
+  canvas.width = W; canvas.height = H;
+  ctx.clearRect(0, 0, W, H);
+
+  if (events.length < 2) return;
+
+  const scores = events.map(e => e.fusedScore);
+  const x = i => 10 + (i / (scores.length - 1)) * (W - 20);
+  const y = v => 10 + (1 - v) * (H - 40);
+
+  // Threshold band
+  ctx.fillStyle = "rgba(56,182,255,0.05)";
+  ctx.fillRect(10, y(1), W - 20, y(thr) - y(1));
+
+  // Score line
+  ctx.strokeStyle = "rgba(56,182,255,0.8)";
+  ctx.lineWidth = 2;
   ctx.beginPath();
-  ctx.moveTo(0, height - 18);
-  ctx.lineTo(width, height - 18);
+  scores.forEach((s, i) => { i === 0 ? ctx.moveTo(x(i), y(s)) : ctx.lineTo(x(i), y(s)); });
   ctx.stroke();
 
-  var sample   = vector.filter(function(_, i) { return i % 41 === 0; }).slice(0, 90);
-  var barWidth = width / sample.length;
-  sample.forEach(function(value, index) {
-    var barHeight = clamp(value * 460, 2, height - 24);
-    ctx.fillStyle = index % 5 === 0 ? "#246a8f" : "#1d8f67";
-    ctx.fillRect(index * barWidth, height - 18 - barHeight, Math.max(2, barWidth - 1), barHeight);
+  // Dots
+  scores.forEach((s, i) => {
+    ctx.fillStyle = events[i].accepted ? "rgba(0,229,160,1)" : "rgba(255,77,106,1)";
+    ctx.beginPath(); ctx.arc(x(i), y(s), 3.5, 0, 2 * Math.PI); ctx.fill();
   });
+
+  // Threshold line
+  ctx.strokeStyle = "rgba(0,229,160,0.3)";
+  ctx.lineWidth = 1;
+  ctx.setLineDash([4, 4]);
+  ctx.beginPath(); ctx.moveTo(10, y(thr)); ctx.lineTo(W - 10, y(thr)); ctx.stroke();
+  ctx.setLineDash([]);
 }
 
-function setMeter(meterEl, score, isGood) {
-  meterEl.style.width      = Math.round(clamp(score, 0, 1) * 100) + "%";
-  meterEl.style.background = isGood ? "var(--color-green)" : "var(--color-red)";
+// ─── 11. UI Updates ───────────────────────────────────────────────────────────
+
+function updateMeter(id, val, className) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.style.width = (val * 100).toFixed(1) + "%";
+  el.className = "meter-fill " + (className || "");
+  el.closest("[role=progressbar]")?.setAttribute("aria-valuenow", Math.round(val * 100));
 }
 
-function renderRegistry(registryListEl, templates) {
-  registryListEl.innerHTML = "";
-  var counts = templates.reduce(function(acc, t) {
-    acc[t.subjectId] = (acc[t.subjectId] || 0) + 1;
-    return acc;
-  }, {});
-  Object.keys(SUBJECTS).forEach(function(subjectId) {
-    var row   = el("div", { className: "registry-row" });
-    var name  = el("span", { text: SUBJECTS[subjectId].label });
-    var count = el("strong", { text: String(counts[subjectId] || 0) });
-    row.appendChild(name);
-    row.appendChild(count);
-    registryListEl.appendChild(row);
-  });
+function updateScoreCard(cardId, score, passed) {
+  const card = document.getElementById(cardId);
+  if (!card) return;
+  card.classList.toggle("pass", passed);
+  card.classList.toggle("fail", score !== null && !passed);
 }
 
-/**
- * Prepend a new audit entry. Rolling window of AUDIT_MAX_ENTRIES.
- */
-function logDecision(auditLogEl, items) {
-  while (auditLogEl.children.length >= CONFIG.AUDIT_MAX_ENTRIES) {
-    auditLogEl.removeChild(auditLogEl.lastChild);
+function setVerdict(accepted, empty = false) {
+  const el = document.getElementById("combinedVerdict");
+  const frame = document.getElementById("cameraFrame");
+  if (!el || !frame) return;
+  el.className = empty ? "" : (accepted ? "pass" : "fail");
+  el.textContent = empty ? "—" : (accepted ? "✓ GRANTED" : "✗ DENIED");
+  frame.classList.toggle("pass", !empty && accepted);
+  frame.classList.toggle("fail", !empty && !accepted);
+}
+
+function setAttackBadge(hint) {
+  const el = document.getElementById("attackBadge");
+  if (!el) return;
+  el.textContent = hint || "—";
+  el.className = "attack-badge " + (hint || "");
+}
+
+function updateRegistryUI() {
+  const container = document.getElementById("registryRows");
+  const badge = document.getElementById("enrollBadge");
+  if (!container) return;
+
+  const total = [...STATE.templates.values()].reduce((s, arr) => s + arr.length, 0);
+  if (badge) badge.textContent = `${STATE.templates.size} enrolled`;
+
+  if (STATE.templates.size === 0) {
+    container.innerHTML = `<div class="registry-row" role="row"><span style="color:var(--c-muted); font-size:0.78rem;">No subjects enrolled</span><span></span><span></span></div>`;
+    return;
   }
 
-  var separator = el("li", { className: "audit-separator" });
-  var ts = el("span", { text: new Date().toLocaleTimeString(), className: "audit-ts" });
-  separator.appendChild(ts);
-  auditLogEl.insertBefore(separator, auditLogEl.firstChild);
-
-  var fragment = document.createDocumentFragment();
-  items.forEach(function(pair) {
-    var li     = el("li");
-    var lspan  = el("span", { text: pair[0] });
-    var strong = el("strong", { text: String(pair[1]) });
-    li.appendChild(lspan);
-    li.appendChild(strong);
-    fragment.appendChild(li);
-  });
-  auditLogEl.insertBefore(fragment, separator);
+  container.innerHTML = [...STATE.templates.entries()].map(([id, tmplArr]) => {
+    const subj = SUBJECTS[id] || {};
+    const meanQ = tmplArr.reduce((s, t) => s + t.quality, 0) / tmplArr.length;
+    const qClass = meanQ > 0.65 ? "high" : meanQ > 0.35 ? "mid" : "low";
+    return `<div class="registry-row" role="row">
+      <span style="font-size:0.84rem;">${subj.name || id}</span>
+      <span style="font-family:var(--font-mono); font-size:0.78rem;">${tmplArr.length}</span>
+      <span><span class="quality-dot ${qClass}" title="Quality: ${(meanQ * 100).toFixed(0)}%"></span></span>
+    </div>`;
+  }).join("");
 }
 
-// ─── Engine (closure-based, fully encapsulated) ───────────────────────────────
+function updateAnalyticsUI() {
+  const events = STATE.events;
+  const total = events.length;
+  const accepts = events.filter(e => e.accepted).length;
+  const denials = total - accepts;
 
-function createBiometricEngine() {
-  var state = {
-    templates:       [],
-    activeChallenge: "blink",
-    lastFrames:      [],
-    lastVector:      [],
+  const genuines = events.filter(e => e.isGenuine);
+  const impostors = events.filter(e => !e.isGenuine);
+  const fa = impostors.filter(e => e.accepted).length;
+  const fr = genuines.filter(e => !e.accepted).length;
+
+  const far = impostors.length > 0 ? fa / impostors.length : null;
+  const frr = genuines.length > 0 ? fr / genuines.length : null;
+  const tar = frr !== null ? 1 - frr : null;
+
+  document.getElementById("kpiTotal").textContent = total;
+  document.getElementById("kpiTotalSub").textContent = `${accepts} accepts · ${denials} denials`;
+  document.getElementById("kpiFAR").textContent = far !== null ? (far * 100).toFixed(1) + "%" : "N/A";
+  document.getElementById("kpiFARSub").textContent = `${fa} false accepts`;
+  document.getElementById("kpiFRR").textContent = frr !== null ? (frr * 100).toFixed(1) + "%" : "N/A";
+  document.getElementById("kpiFRRSub").textContent = `${fr} false rejects`;
+  document.getElementById("kpiTAR").textContent = tar !== null ? (tar * 100).toFixed(1) + "%" : "N/A";
+
+  // Score distributions
+  const genuineScores = genuines.map(e => e.fusedScore);
+  const impostorScores = impostors.map(e => e.fusedScore);
+  const distCanvas = document.getElementById("distributionCanvas");
+  if (distCanvas) drawDistribution(distCanvas, genuineScores, impostorScores, STATE.threshold);
+
+  const tlCanvas = document.getElementById("timelineCanvas");
+  if (tlCanvas) drawTimeline(tlCanvas, events, STATE.threshold);
+
+  // Attack breakdown
+  const breakdown = document.getElementById("attackBreakdown");
+  if (breakdown) {
+    const hints = { static: 0, replay: 0, printed: 0, genuine: 0 };
+    for (const e of events) hints[e.attackHint] = (hints[e.attackHint] || 0) + 1;
+    if (total === 0) {
+      breakdown.innerHTML = `<p style="font-size:0.82rem; color:var(--c-muted);">No data yet. Run authentications.</p>`;
+    } else {
+      breakdown.innerHTML = Object.entries(hints).map(([k, v]) => {
+        const pct = total > 0 ? (v / total * 100).toFixed(0) : 0;
+        return `<div style="display:flex; justify-content:space-between; align-items:center; padding:6px 0; border-bottom:1px solid var(--c-border);">
+          <span class="attack-badge ${k}" style="font-size:0.70rem;">${k}</span>
+          <span style="font-family:var(--font-mono); font-size:0.80rem; color:var(--c-ink);">${v} <span style="color:var(--c-muted);">(${pct}%)</span></span>
+        </div>`;
+      }).join("");
+    }
+  }
+}
+
+// ─── 12. Audit Chain ─────────────────────────────────────────────────────────
+
+async function appendAuditEntry({ subjectId, accepted, fusedScore, attackHint }) {
+  const payload = JSON.stringify({
+    index: STATE.auditIndex,
+    subject_id: subjectId,
+    accepted,
+    fused_score: fusedScore,
+    attack_hint: attackHint,
+    prev_hash: STATE.prevAuditHash,
+  });
+  const msgBuffer = new TextEncoder().encode(payload);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", msgBuffer);
+  const hashHex = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, "0")).join("");
+
+  STATE.prevAuditHash = hashHex;
+  STATE.auditIndex++;
+
+  const log = document.getElementById("auditLog");
+  if (!log) return hashHex;
+
+  const li = document.createElement("li");
+  li.setAttribute("role", "listitem");
+  li.innerHTML = `
+    <span>${accepted ? "✓" : "✗"} <strong style="color:${accepted ? "var(--c-green)" : "var(--c-red)"};">${subjectId || "—"}</strong> — ${attackHint || "genuine"}</span>
+    <strong style="font-size:0.68rem; color:var(--c-muted);">${hashHex.slice(0, 16)}…</strong>
+  `;
+  if (log.firstElementChild?.textContent?.includes("No events")) log.innerHTML = "";
+  log.prepend(li);
+
+  return hashHex;
+}
+
+// ─── 13. Authentication Flow ──────────────────────────────────────────────────
+
+let lastVector = null;
+
+async function runAuthentication(subjectKey) {
+  const subj = SUBJECTS[subjectKey];
+  const attack = STATE.attack;
+  const noise = STATE.noise;
+
+  // Determine face params based on attack
+  let faceParams = { ...subj, noise };
+  if (attack === "impostor") {
+    const keys = Object.keys(SUBJECTS).filter(k => k !== subjectKey);
+    const impostor = SUBJECTS[keys[Math.floor(Math.random() * keys.length)]];
+    faceParams = { ...impostor, noise };
+  } else if (attack === "static" || attack === "replay") {
+    faceParams = { ...faceParams, noise: Math.max(0, noise - 2) };
+  }
+
+  const isGenuine = attack === "none";
+
+  // Generate face
+  const faceImg = syntheticFace(faceParams);
+  const faceCanvas = document.getElementById("faceCanvas");
+  drawFace(faceCanvas, faceImg);
+
+  // Generate liveness frames
+  const liveness_frames = Array.from({ length: 5 }, (_, i) => {
+    if (attack === "static") return faceImg;
+    if (attack === "replay") return syntheticFace({ ...faceParams, noise: Math.max(0, noise - 1), shiftX: i * 0.3 });
+    return syntheticFace({ ...faceParams, noise, shiftX: i, shiftY: i > 2 ? 1 : 0, blink: i === 2 });
+  });
+
+  // Draw filmstrip
+  const filmstrip = document.getElementById("filmstrip");
+  filmstrip.innerHTML = "";
+  liveness_frames.forEach((f, i) => {
+    const c = document.createElement("canvas");
+    c.width = SIZE; c.height = SIZE;
+    c.title = `Frame ${i + 1}`;
+    c.setAttribute("role", "img");
+    c.setAttribute("aria-label", `Liveness frame ${i + 1}`);
+    drawMiniFrame(c, f);
+    filmstrip.appendChild(c);
+  });
+  document.getElementById("livenessFrameCount").textContent = `${liveness_frames.length} frames`;
+
+  // Recognition
+  const rows = toRows(faceImg);
+  const rawVec = extractLBPGabor(rows);
+  whitener.update(rawVec);
+  const vec = whitener.whiten(rawVec);
+  lastVector = vec;
+
+  document.getElementById("featureDim").textContent = `dim: ${vec.length}`;
+  const vectorCanvas = document.getElementById("vectorCanvas");
+  if (vectorCanvas) drawVector(vectorCanvas, vec);
+
+  let recSim = 0, recAccepted = false, topCandidate = null;
+  const tmplList = [...STATE.templates.values()].flat();
+  const subjTemplates = STATE.templates.get(subjectKey) || [];
+
+  if (subjTemplates.length === 0) {
+    document.getElementById("captureLabel").textContent = "⚠ Subject not enrolled — please enroll first";
+    return;
+  }
+
+  // Score against enrolled subject
+  let bestSim = 0;
+  for (const tmpl of subjTemplates) {
+    const s = similarity(vec, tmpl.vector, STATE.metric) * Math.max(0.5, tmpl.quality);
+    if (s > bestSim) bestSim = s;
+  }
+  recSim = bestSim;
+
+  // Active threshold
+  const activeThr = adaptiveThr.threshold;
+  recAccepted = recSim >= activeThr;
+
+  // Also check top candidate across all subjects
+  let globalBest = 0, globalSubj = null;
+  for (const [sid, tmpls] of STATE.templates) {
+    for (const t of tmpls) {
+      const s = similarity(vec, t.vector, STATE.metric);
+      if (s > globalBest) { globalBest = s; globalSubj = sid; }
+    }
+  }
+  topCandidate = globalSubj;
+
+  // Liveness
+  const liveness = assessLiveness(liveness_frames, STATE.challenge);
+
+  // Fusion
+  const { fused, accepted } = fuse(recSim, liveness.score, STATE.metric, STATE.threshold);
+
+  // Update adaptive threshold
+  adaptiveThr.record(recSim, isGenuine);
+  if (accepted && isGenuine) adaptiveThr.record(fused, true);
+  else if (!accepted && !isGenuine) adaptiveThr.record(fused, false);
+
+  // Update score cards
+  const recGood = recSim >= activeThr;
+  const liveGood = liveness.score >= 0.40;
+  const meterClass = v => v > 0.60 ? "good" : v > 0.35 ? "warn" : "bad";
+
+  document.getElementById("recScore").textContent = recSim.toFixed(3);
+  updateMeter("recMeter", recSim, meterClass(recSim));
+  updateScoreCard("recCard", recSim, recGood);
+  document.getElementById("recDetail").textContent = `thr: ${activeThr.toFixed(3)} | metric: ${STATE.metric} | top: ${SUBJECTS[topCandidate]?.name || "—"}`;
+
+  document.getElementById("liveScore").textContent = liveness.score.toFixed(3);
+  updateMeter("liveMeter", liveness.score, meterClass(liveness.score));
+  updateScoreCard("liveCard", liveness.score, liveGood);
+  document.getElementById("liveDetail").textContent =
+    `motion: ${(liveness.metrics.motion * 1000).toFixed(1)}‰ | entropy: ${liveness.metrics.ms_lbp_entropy.toFixed(3)} | symm: ${liveness.metrics.symmetry.toFixed(3)}`;
+
+  document.getElementById("fusedScore").textContent = fused.toFixed(3);
+  updateMeter("fusedMeter", fused, meterClass(fused));
+  updateScoreCard("fusedCard", fused, accepted);
+  document.getElementById("fusedDetail").textContent = `thr: ${STATE.threshold.toFixed(2)} | ${accepted ? "ACCEPT" : "DENY"} | gap: ${Math.abs(fused - STATE.threshold).toFixed(3)}`;
+
+  setVerdict(accepted);
+  setAttackBadge(liveness.attackHint);
+
+  const captureLabel = document.getElementById("captureLabel");
+  captureLabel.textContent = `${subj.name} (${subj.id}) — ${attack !== "none" ? "⚠ " + attack.toUpperCase() + " ATTACK" : "genuine"}`;
+
+  // XAI trace
+  const xaiLines = [
+    `Recognition: ${recSim.toFixed(4)} vs thr ${activeThr.toFixed(4)} → ${recGood ? "PASS" : "FAIL"}`,
+    `Liveness: ${liveness.score.toFixed(4)} vs thr 0.40 → ${liveGood ? "PASS" : "FAIL"}`,
+    `Attack hint: ${liveness.attackHint} (conf ${(liveness.attackConf * 100).toFixed(0)}%)`,
+    `Fusion (${STATE.metric}): ${fused.toFixed(4)} vs thr ${STATE.threshold.toFixed(2)} → ${accepted ? "ACCEPT" : "DENY"}`,
+    `EER threshold: ${adaptiveThr.eer !== null ? adaptiveThr.eer.toFixed(4) : "N/A (insufficient data)"}`,
+    ...Object.entries(liveness.metrics).map(([k, v]) => `  ${k}: ${v.toFixed(4)}`),
+    ...(liveness.reasons.length ? liveness.reasons.map(r => `⚠ ${r}`) : []),
+  ];
+  const xaiList = document.getElementById("xaiList");
+  xaiList.innerHTML = xaiLines.map((line, i) => {
+    const isWarn = line.startsWith("⚠");
+    return `<li class="${isWarn ? "fail-reason" : ""}">${line}</li>`;
+  }).join("");
+
+  // Record event
+  const authEvent = {
+    timestamp: new Date().toISOString(),
+    subjectId: accepted ? subjectKey : null,
+    claimedId: subjectKey,
+    accepted,
+    recSim, livenessScore: liveness.score, fusedScore: fused,
+    attackHint: liveness.attackHint,
+    isGenuine,
+    metric: STATE.metric,
+    threshold: STATE.threshold,
   };
+  STATE.events.push(authEvent);
+  await appendAuditEntry({ subjectId: subjectKey, accepted, fusedScore: fused, attackHint: liveness.attackHint });
 
-  var els = null;
-
-  function queryElements() {
-    return {
-      claimedIdentity:  document.querySelector("#claimedIdentity"),
-      probeSubject:     document.querySelector("#probeSubject"),
-      lighting:         document.querySelector("#lighting"),
-      jitter:           document.querySelector("#jitter"),
-      faceCanvas:       document.querySelector("#faceCanvas"),
-      vectorCanvas:     document.querySelector("#vectorCanvas"),
-      filmstrip:        document.querySelector("#filmstrip"),
-      registryList:     document.querySelector("#registryList"),
-      captureLabel:     document.querySelector("#captureLabel"),
-      combinedVerdict:  document.querySelector("#combinedVerdict"),
-      recognitionScore: document.querySelector("#recognitionScore"),
-      livenessScore:    document.querySelector("#livenessScore"),
-      challengeScore:   document.querySelector("#challengeScore"),
-      recognitionMeter: document.querySelector("#recognitionMeter"),
-      livenessMeter:    document.querySelector("#livenessMeter"),
-      challengeMeter:   document.querySelector("#challengeMeter"),
-      resultBox:        document.querySelector("#resultBox"),
-      auditLog:         document.querySelector("#auditLog"),
-    };
-  }
-
-  function attachResizeObserver() {
-    var ro = new ResizeObserver(function() {
-      if (state.lastVector.length) drawVector(els.vectorCanvas, state.lastVector);
-    });
-    ro.observe(els.vectorCanvas.parentElement);
-  }
-
-  function enroll(subjectId) {
-    var count = state.templates.filter(function(t) { return t.subjectId === subjectId; }).length;
-    var sample = syntheticFace(subjectId, {
-      shiftX:   (count % 3) - 1,
-      shiftY:   count % 2,
-      noise:    2 + (count % 3),
-      lighting: Number(els.lighting.value) / 3,
-    });
-    state.templates.push({
-      subjectId: subjectId,
-      vector:    extractTemplate(sample),
-      createdAt: new Date().toISOString(),
-    });
-    renderRegistry(els.registryList, state.templates);
-  }
-
-  function runScenario(params) {
-    var claimedId = params.claimedId;
-    var probeId   = params.probeId;
-    var challenge = params.challenge;
-    var spoof     = params.spoof || false;
-    var RECOGNITION_THRESHOLD  = CONFIG.RECOGNITION_THRESHOLD;
-    var CHALLENGE_PASS_THRESHOLD = CONFIG.CHALLENGE_PASS_THRESHOLD;
-
-    // Update challenge state & aria-pressed — no dropdown value mutation
-    state.activeChallenge = challenge;
-    document.querySelectorAll(".segment").forEach(function(btn) {
-      var isActive = btn.dataset.challenge === challenge;
-      btn.classList.toggle("active", isActive);
-      btn.setAttribute("aria-pressed", String(isActive));
-    });
-
-    var lighting    = Number(els.lighting.value);
-    var jitter      = Number(els.jitter.value);
-    var frames      = buildFrames(probeId, spoof ? "static" : challenge, { lighting: lighting, jitter: jitter });
-    var probe       = frames[frames.length - 1];
-    var recognition = identify(state.templates, probe);
-    var best        = recognition.candidates[0] || { subjectId: null, score: 0 };
-    var verified    = best.subjectId === claimedId && best.score >= RECOGNITION_THRESHOLD;
-    var liveness    = assessLiveness(frames, challenge);
-    var accepted    = verified && liveness.passed;
-
-    state.lastFrames = frames;
-    state.lastVector = recognition.vector;
-
-    // Render
-    drawMatrix(els.faceCanvas, probe);
-    drawFilmstrip(els.filmstrip, frames);
-    drawVector(els.vectorCanvas, recognition.vector);
-
-    // Meta
-    var subjectProfile = SUBJECTS[probeId];
-    els.captureLabel.textContent =
-      (subjectProfile ? subjectProfile.label : probeId) +
-      " \u00b7 " + challenge.replace(/_/g, " ");
-
-    // Scores
-    els.recognitionScore.textContent = best.score.toFixed(3);
-    els.livenessScore.textContent    = liveness.score.toFixed(3);
-    els.challengeScore.textContent   = liveness.challengeValue.toFixed(3);
-    setMeter(els.recognitionMeter, best.score,              verified);
-    setMeter(els.livenessMeter,    liveness.score,          liveness.passed);
-    setMeter(els.challengeMeter,   liveness.challengeValue, liveness.challengeValue >= CHALLENGE_PASS_THRESHOLD);
-
-    // Result box — XSS-safe
-    var decisionLabel = el("span", { text: "Decision" });
-    var decisionValue = el("strong", { text: accepted ? "Access approved" : "Access denied" });
-    els.resultBox.className = "result-box " + (accepted ? "pass" : "fail");
-    els.resultBox.replaceChildren(decisionLabel, decisionValue);
-
-    // Verdict badge (aria-live)
-    els.combinedVerdict.className   = accepted ? "pass" : "fail";
-    els.combinedVerdict.textContent = accepted ? "PASS" : "FAIL";
-
-    // Audit
-    var reasons = [];
-    if (!verified) reasons.push("identity mismatch");
-    reasons.push.apply(reasons, liveness.reasons);
-
-    var claimedLabel = SUBJECTS[claimedId] ? SUBJECTS[claimedId].label : claimedId;
-    var matchLabel   = best.subjectId
-      ? (SUBJECTS[best.subjectId] ? SUBJECTS[best.subjectId].label : best.subjectId)
-      : "None";
-
-    logDecision(els.auditLog, [
-      ["Claimed identity",  claimedLabel],
-      ["Top match",         matchLabel],
-      ["Recognition score", best.score.toFixed(4)],
-      ["Liveness score",    liveness.score.toFixed(4)],
-      ["Recognition thr.",  RECOGNITION_THRESHOLD.toFixed(2)],
-      ["Liveness thr.",     CONFIG.LIVENESS_THRESHOLD.toFixed(2)],
-      ["Verdict",           accepted ? "\u2713 All checks passed" : "\u2717 " + reasons.join(", ")],
-    ]);
-  }
-
-  function bootstrap() {
-    els = queryElements();
-    attachResizeObserver();
-
-    Object.keys(SUBJECTS).forEach(function(id) { enroll(id); enroll(id); });
-
-    // Segment buttons — single delegated listener
-    document.querySelector(".segmented").addEventListener("click", function(e) {
-      var btn = e.target.closest(".segment");
-      if (!btn) return;
-      var challenge = btn.dataset.challenge;
-      runScenario({ claimedId: els.claimedIdentity.value, probeId: els.probeSubject.value, challenge: challenge, spoof: challenge === "static" });
-    });
-
-    document.querySelector("#runVerified").addEventListener("click", function() {
-      runScenario({ claimedId: "operator-a", probeId: "operator-a", challenge: "blink" });
-    });
-    document.querySelector("#runSpoof").addEventListener("click", function() {
-      runScenario({ claimedId: els.claimedIdentity.value, probeId: els.claimedIdentity.value, challenge: "blink", spoof: true });
-    });
-    document.querySelector("#runMismatch").addEventListener("click", function() {
-      runScenario({ claimedId: "operator-a", probeId: "operator-b", challenge: "turn_left" });
-    });
-    document.querySelector("#enrollCurrent").addEventListener("click", function() {
-      enroll(els.probeSubject.value);
-      runScenario({ claimedId: els.claimedIdentity.value, probeId: els.probeSubject.value, challenge: state.activeChallenge, spoof: state.activeChallenge === "static" });
-    });
-
-    [els.claimedIdentity, els.probeSubject, els.lighting, els.jitter].forEach(function(control) {
-      control.addEventListener("input", function() {
-        runScenario({ claimedId: els.claimedIdentity.value, probeId: els.probeSubject.value, challenge: state.activeChallenge, spoof: state.activeChallenge === "static" });
-      });
-    });
-
-    runScenario({ claimedId: "operator-a", probeId: "operator-a", challenge: "blink" });
-  }
-
-  return { bootstrap: bootstrap, enroll: enroll, runScenario: runScenario };
+  updateAnalyticsUI();
 }
 
-// ─── Entry point ──────────────────────────────────────────────────────────────
+function runEnrollment(subjectKey) {
+  const subj = SUBJECTS[subjectKey];
+  const faces = Array.from({ length: 3 }, (_, i) =>
+    syntheticFace({ ...subj, noise: STATE.noise + i, shiftX: i })
+  );
 
-document.addEventListener("DOMContentLoaded", function() {
-  var engine = createBiometricEngine();
-  engine.bootstrap();
+  const templates = faces.map(faceImg => {
+    const rows = toRows(faceImg);
+    const rawVec = extractLBPGabor(rows);
+    whitener.update(rawVec);
+    const vec = whitener.whiten(rawVec);
+    const quality = imageQuality(rows);
+    return { vector: vec, quality };
+  });
+
+  if (!STATE.templates.has(subjectKey)) STATE.templates.set(subjectKey, []);
+  STATE.templates.get(subjectKey).push(...templates);
+
+  // Show last enrolled face
+  drawFace(document.getElementById("faceCanvas"), faces.at(-1));
+  document.getElementById("captureLabel").textContent =
+    `Enrolled: ${subj.name} (${templates.length} templates, avg quality: ${(templates.reduce((s,t) => s+t.quality,0)/templates.length*100).toFixed(0)}%)`;
+
+  setVerdict(null, true);
+  updateRegistryUI();
+}
+
+// ─── 14. Event Wiring ─────────────────────────────────────────────────────────
+
+function getSubjectKey() { return document.getElementById("subjectSelect")?.value || "sharma-r"; }
+
+document.getElementById("btnEnroll").addEventListener("click", () => {
+  runEnrollment(getSubjectKey());
 });
+
+document.getElementById("btnAuthenticate").addEventListener("click", async () => {
+  const btn = document.getElementById("btnAuthenticate");
+  btn.classList.add("loading");
+  btn.disabled = true;
+  try {
+    await runAuthentication(getSubjectKey());
+  } finally {
+    btn.classList.remove("loading");
+    btn.disabled = false;
+  }
+});
+
+document.getElementById("btnClear").addEventListener("click", () => {
+  STATE.templates.clear();
+  STATE.events = [];
+  STATE.prevAuditHash = "0".repeat(64);
+  STATE.auditIndex = 0;
+  updateRegistryUI();
+  setVerdict(null, true);
+  document.getElementById("captureLabel").textContent = "Ready — press Enroll or Authenticate";
+  document.getElementById("auditLog").innerHTML = `<li style="color:var(--c-muted); font-size:0.80rem; padding:8px;">No events recorded.</li>`;
+  document.getElementById("xaiList").innerHTML = `<li style="color:var(--c-muted)">Run an authentication to see the decision trace.</li>`;
+  ["recScore","liveScore","fusedScore"].forEach(id => { const el = document.getElementById(id); if (el) el.textContent = "—"; });
+  ["recMeter","liveMeter","fusedMeter"].forEach(id => updateMeter(id, 0, ""));
+  updateAnalyticsUI();
+});
+
+document.getElementById("thresholdRange").addEventListener("input", function () {
+  STATE.threshold = parseFloat(this.value);
+  document.getElementById("thresholdVal").textContent = STATE.threshold.toFixed(2);
+  this.setAttribute("aria-valuenow", this.value);
+});
+
+document.getElementById("noiseRange").addEventListener("input", function () {
+  STATE.noise = parseInt(this.value, 10);
+  document.getElementById("noiseVal").textContent = STATE.noise;
+});
+
+document.getElementById("attackSelect").addEventListener("change", function () {
+  STATE.attack = this.value;
+});
+
+document.getElementById("challengeSelect").addEventListener("change", function () {
+  STATE.challenge = this.value;
+});
+
+// Metric segmented control
+document.querySelectorAll(".segment").forEach(btn => {
+  btn.addEventListener("click", function () {
+    document.querySelectorAll(".segment").forEach(b => {
+      b.classList.remove("active");
+      b.setAttribute("aria-pressed", "false");
+    });
+    this.classList.add("active");
+    this.setAttribute("aria-pressed", "true");
+    STATE.metric = this.dataset.metric;
+    const badge = document.getElementById("modelBadge");
+    if (badge) badge.textContent = `Model: LBPH + Gabor (${STATE.metric})`;
+  });
+});
+
+// Tab navigation
+document.querySelectorAll(".tab-btn").forEach(btn => {
+  btn.addEventListener("click", function () {
+    document.querySelectorAll(".tab-btn").forEach(b => {
+      b.classList.remove("active");
+      b.setAttribute("aria-selected", "false");
+    });
+    document.querySelectorAll(".tab-panel").forEach(p => p.classList.remove("active"));
+
+    this.classList.add("active");
+    this.setAttribute("aria-selected", "true");
+    const target = document.getElementById("tab-" + this.dataset.tab);
+    if (target) target.classList.add("active");
+
+    if (this.dataset.tab === "analytics") {
+      requestAnimationFrame(updateAnalyticsUI);
+    }
+  });
+});
+
+// Copy XAI
+document.getElementById("btnCopyXAI").addEventListener("click", () => {
+  const text = [...document.querySelectorAll("#xaiList li")].map(li => li.textContent.trim()).join("\n");
+  navigator.clipboard?.writeText(text).then(() => {
+    const btn = document.getElementById("btnCopyXAI");
+    btn.textContent = "Copied!";
+    setTimeout(() => { btn.textContent = "Copy"; }, 2000);
+  });
+});
+
+// Export audit log
+document.getElementById("btnExportLog").addEventListener("click", () => {
+  const payload = JSON.stringify({
+    events: STATE.events,
+    generated_at: new Date().toISOString(),
+    session_metrics: {
+      total: STATE.events.length,
+      accepts: STATE.events.filter(e => e.accepted).length,
+      far: (() => {
+        const imp = STATE.events.filter(e => !e.isGenuine);
+        return imp.length > 0 ? (imp.filter(e => e.accepted).length / imp.length).toFixed(4) : "N/A";
+      })(),
+    },
+  }, null, 2);
+  const blob = new Blob([payload], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `nhai-audit-${Date.now()}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+});
+
+// ─── 15. Keyboard shortcuts ───────────────────────────────────────────────────
+
+document.addEventListener("keydown", e => {
+  if ((e.ctrlKey || e.metaKey) && e.key === "e") { e.preventDefault(); runEnrollment(getSubjectKey()); }
+  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); document.getElementById("btnAuthenticate").click(); }
+});
+
+// ─── 16. Initial render ───────────────────────────────────────────────────────
+
+(function init() {
+  updateRegistryUI();
+  updateAnalyticsUI();
+
+  // Draw a placeholder face on load
+  const faceImg = syntheticFace(SUBJECTS["sharma-r"]);
+  const canvas = document.getElementById("faceCanvas");
+  if (canvas) drawFace(canvas, faceImg);
+})();

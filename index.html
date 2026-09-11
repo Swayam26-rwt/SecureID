@@ -1,266 +1,481 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta
-      name="description"
-      content="Datalake 3.0 offline facial recognition and liveness detection demo — runs entirely in-browser with zero network calls."
-    />
-    <meta name="theme-color" content="#1b2420" media="(prefers-color-scheme: dark)" />
-    <meta name="theme-color" content="#eef2ef" media="(prefers-color-scheme: light)" />
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>NHAI Datalake 3.0 — Offline Biometric Authentication System</title>
+  <meta name="description" content="Industry-grade offline biometric authentication engine featuring multi-modal fusion, Gabor+LPQ feature extraction, adaptive EER thresholding, optical flow liveness, and cryptographic audit chain." />
+  <meta name="theme-color" content="#080c10" />
 
-    <title>Datalake 3.0 Offline Biometrics Demo</title>
+  <!-- Google Fonts: Inter + JetBrains Mono -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;600;700&display=swap" />
 
-    <!-- Google Fonts: Inter -->
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap"
-    />
+  <link rel="stylesheet" href="assets/styles.css" />
+</head>
+<body>
+  <div class="app-shell">
 
-    <link rel="stylesheet" href="assets/styles.css" />
-  </head>
-  <body>
-    <main class="app-shell">
-      <header class="topbar">
-        <div>
-          <p class="eyebrow">Datalake 3.0 Edge Auth</p>
-          <h1>Offline Biometrics Demo</h1>
+    <!-- ── Top Bar ── -->
+    <header class="topbar" role="banner">
+      <div class="brand">
+        <div class="brand-logo" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2a7 7 0 0 1 7 7c0 5-7 13-7 13S5 14 5 9a7 7 0 0 1 7-7z"/>
+            <circle cx="12" cy="9" r="2.5"/>
+          </svg>
         </div>
-        <div class="status-strip" aria-label="Runtime status">
-          <span class="status-pill">Browser only</span>
-          <span class="status-pill">0 network calls</span>
-          <span class="status-pill">Templates in memory</span>
+        <div class="brand-text">
+          <span class="eyebrow">National Highways Authority of India</span>
+          <h1>Datalake 3.0 — Biometric Engine</h1>
         </div>
-      </header>
+      </div>
+      <div class="status-strip">
+        <span class="status-pill" title="Running fully offline — zero cloud dependency">Offline Mode</span>
+        <span class="status-pill" id="modelBadge">Model: LBPH + Gabor</span>
+        <span class="status-pill" id="enrollBadge">0 enrolled</span>
+      </div>
+    </header>
 
-      <section class="workspace" aria-label="Biometric demonstration console">
-        <!-- ── Left: control panel ───────────────────────────────────────── -->
-        <aside class="control-panel" aria-label="Scenario controls">
-          <div class="panel-heading">
-            <span class="section-kicker">Claim</span>
-            <strong>Identity</strong>
-          </div>
+    <!-- ── Tab navigation ── -->
+    <nav class="tab-nav" role="tablist" aria-label="Dashboard sections">
+      <button class="tab-btn active" id="tab-demo-btn" role="tab" aria-selected="true" aria-controls="tab-demo" data-tab="demo">
+        <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
+        Live Demo
+      </button>
+      <button class="tab-btn" id="tab-analytics-btn" role="tab" aria-selected="false" aria-controls="tab-analytics" data-tab="analytics">
+        <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="12" width="4" height="9"/><rect x="10" y="7" width="4" height="14"/><rect x="17" y="3" width="4" height="18"/></svg>
+        Analytics
+      </button>
+      <button class="tab-btn" id="tab-about-btn" role="tab" aria-selected="false" aria-controls="tab-about" data-tab="about">
+        <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><line x1="12" y1="8" x2="12" y2="8"/><path d="M12 12v5"/></svg>
+        ML Architecture
+      </button>
+    </nav>
 
-          <div>
-            <label class="field-label" for="claimedIdentity">Subject ID</label>
-            <select id="claimedIdentity" class="select" aria-label="Claimed identity subject">
-              <option value="operator-a">Operator A</option>
-              <option value="operator-b">Operator B</option>
-              <option value="operator-c">Operator C</option>
+    <!-- ══════════════ TAB: LIVE DEMO ══════════════ -->
+    <section id="tab-demo" class="tab-panel active" role="tabpanel" aria-labelledby="tab-demo-btn">
+      <div class="workspace">
+
+        <!-- LEFT: Control panel -->
+        <aside class="control-panel" role="complementary" aria-label="Configuration">
+
+          <!-- Subject selector -->
+          <div class="card">
+            <label class="field-label" for="subjectSelect">Subject Identity</label>
+            <select class="select" id="subjectSelect" aria-label="Select subject for authentication">
+              <option value="sharma-r">Officer Sharma, R. (ID: NHO-0241)</option>
+              <option value="patel-v">Officer Patel, V. (ID: NHO-0392)</option>
+              <option value="das-a">Officer Das, A. (ID: NHO-0578)</option>
+              <option value="gupta-m">Officer Gupta, M. (ID: NHO-0614)</option>
+              <option value="nair-k">Officer Nair, K. (ID: NHO-0721)</option>
             </select>
           </div>
 
-          <div>
-            <label class="field-label" for="probeSubject">Live sample</label>
-            <select id="probeSubject" class="select" aria-label="Probe subject for live sample">
-              <option value="operator-a">Operator A</option>
-              <option value="operator-b">Operator B</option>
-              <option value="operator-c">Operator C</option>
-            </select>
-          </div>
-
-          <div
-            class="segmented"
-            role="group"
-            aria-label="Liveness challenge mode"
-          >
-            <button
-              class="segment active"
-              data-challenge="blink"
-              type="button"
-              aria-pressed="true"
-            >Blink</button>
-            <button
-              class="segment"
-              data-challenge="turn_left"
-              type="button"
-              aria-pressed="false"
-            >Turn</button>
-            <button
-              class="segment"
-              data-challenge="static"
-              type="button"
-              aria-pressed="false"
-            >Static</button>
-          </div>
-
-          <div>
-            <label class="field-label" for="lighting">Lighting offset</label>
-            <input
-              id="lighting"
-              type="range"
-              min="-28"
-              max="28"
-              value="0"
-              aria-label="Lighting offset in simulated exposure units"
-            />
-          </div>
-
-          <div>
-            <label class="field-label" for="jitter">Camera jitter</label>
-            <input
-              id="jitter"
-              type="range"
-              min="0"
-              max="8"
-              value="4"
-              aria-label="Camera jitter in pixels"
-            />
-          </div>
-
-          <div class="button-grid">
-            <button
-              id="runVerified"
-              class="action primary"
-              type="button"
-              aria-label="Run verified entry scenario: Operator A vs Operator A"
-            >
-              Run verified entry
-            </button>
-            <button
-              id="runSpoof"
-              class="action"
-              type="button"
-              aria-label="Run spoof check: static frame against claimed identity"
-            >
-              Run spoof check
-            </button>
-            <button
-              id="runMismatch"
-              class="action"
-              type="button"
-              aria-label="Run identity mismatch: Operator A claimed, Operator B probe"
-            >
-              Run mismatch
-            </button>
-            <button
-              id="enrollCurrent"
-              class="action"
-              type="button"
-              aria-label="Enroll the currently selected probe subject"
-            >
-              Enroll sample
-            </button>
-          </div>
-
-          <div class="registry" aria-label="Enrolled subjects">
-            <div class="registry-header" role="row">
-              <span>Subject</span>
-              <span>Templates</span>
+          <!-- Metric selector -->
+          <div class="card">
+            <label class="field-label">Similarity Metric</label>
+            <div class="segmented" role="group" aria-label="Similarity metric">
+              <button class="segment active" id="seg-cosine" data-metric="cosine" aria-pressed="true">Cosine</button>
+              <button class="segment" id="seg-weighted" data-metric="weighted" aria-pressed="false">Weighted</button>
+              <button class="segment" id="seg-min" data-metric="min" aria-pressed="false">Min</button>
             </div>
-            <div id="registryList" role="list"></div>
           </div>
+
+          <!-- Threshold -->
+          <div class="card">
+            <div class="range-row">
+              <label class="field-label" for="thresholdRange">Fusion Threshold</label>
+              <span class="range-val" id="thresholdVal" aria-live="polite">0.65</span>
+            </div>
+            <input type="range" id="thresholdRange" min="0.30" max="0.95" step="0.01" value="0.65" aria-valuenow="0.65" aria-valuemin="0.30" aria-valuemax="0.95" />
+          </div>
+
+          <!-- Noise -->
+          <div class="card">
+            <div class="range-row">
+              <label class="field-label" for="noiseRange">Image Noise σ</label>
+              <span class="range-val" id="noiseVal" aria-live="polite">3</span>
+            </div>
+            <input type="range" id="noiseRange" min="0" max="15" step="1" value="3" aria-valuenow="3" />
+          </div>
+
+          <!-- Attack simulation -->
+          <div class="card">
+            <label class="field-label" for="attackSelect">Attack Simulation</label>
+            <select class="select" id="attackSelect" aria-label="Simulate attack type">
+              <option value="none">None — genuine face</option>
+              <option value="static">Static photo (no motion)</option>
+              <option value="replay">Screen replay (low entropy)</option>
+              <option value="impostor">Impostor face</option>
+            </select>
+          </div>
+
+          <!-- Challenge -->
+          <div class="card">
+            <label class="field-label" for="challengeSelect">Challenge Mode</label>
+            <select class="select" id="challengeSelect" aria-label="Active challenge">
+              <option value="">None</option>
+              <option value="blink" selected>Blink detection</option>
+              <option value="turn_left">Turn left</option>
+              <option value="turn_right">Turn right</option>
+              <option value="nod">Nod</option>
+              <option value="smile">Smile</option>
+            </select>
+          </div>
+
+          <!-- Action buttons -->
+          <div class="btn-grid" style="grid-template-columns: 1fr 1fr;">
+            <button class="btn primary" id="btnEnroll" aria-label="Enroll current subject">
+              <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8l2 2 4-4"/></svg>
+              Enroll
+            </button>
+            <button class="btn" id="btnAuthenticate" aria-label="Run authentication against enrolled templates">
+              <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+              Authenticate
+            </button>
+          </div>
+
+          <button class="btn danger" id="btnClear" aria-label="Clear all enrolled templates">
+            <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6m5 0V4h4v2"/></svg>
+            Clear Registry
+          </button>
+
+          <!-- Registry -->
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title">
+                <span class="kicker">Template Store</span>
+                <strong>Enrolled Registry</strong>
+              </div>
+            </div>
+            <div class="registry" role="table" aria-label="Enrolled subjects">
+              <div class="registry-head" role="row">
+                <span role="columnheader">Subject</span>
+                <span role="columnheader">Templates</span>
+                <span role="columnheader">Quality</span>
+              </div>
+              <div id="registryRows" role="rowgroup" aria-label="Registry entries">
+                <!-- filled by JS -->
+              </div>
+            </div>
+          </div>
+
         </aside>
 
-        <!-- ── Right: demo panel ─────────────────────────────────────────── -->
-        <section class="demo-panel" aria-label="Capture and scoring">
+        <!-- RIGHT: Main demo area -->
+        <main class="demo-panel" aria-label="Biometric demo results">
+
+          <!-- Capture row -->
           <div class="capture-grid">
-            <!-- Face scanner -->
-            <div class="scanner">
-              <div class="canvas-frame" aria-label="Synthetic face frame">
-                <!-- Canvas sized to match SIZE=96 constant in app.js -->
-                <canvas
-                  id="faceCanvas"
-                  width="96"
-                  height="96"
-                  aria-label="Rendered synthetic face"
-                  role="img"
-                ></canvas>
+
+            <!-- Scanner -->
+            <section class="scanner" aria-label="Face scanner">
+              <div class="card-header" style="padding: 0 0 10px 0; border: 0;">
+                <div class="card-title">
+                  <span class="kicker">Biometric Sensor</span>
+                  <strong>Face Capture</strong>
+                </div>
+              </div>
+
+              <div class="canvas-frame" id="cameraFrame" role="img" aria-label="Simulated biometric camera feed">
+                <!-- Scan UI -->
                 <div class="scanline" aria-hidden="true"></div>
+                <div class="corner-bracket tl" aria-hidden="true"></div>
+                <div class="corner-bracket tr" aria-hidden="true"></div>
+                <div class="corner-bracket bl" aria-hidden="true"></div>
+                <div class="corner-bracket br" aria-hidden="true"></div>
+                <canvas id="faceCanvas" width="96" height="96" role="img" aria-label="Captured face pixels"></canvas>
               </div>
+
               <div class="capture-meta">
-                <span id="captureLabel">Operator A · blink challenge</span>
-                <!-- aria-live so screen readers announce verdict changes -->
-                <strong
-                  id="combinedVerdict"
-                  role="status"
-                  aria-live="polite"
-                  aria-atomic="true"
-                >READY</strong>
+                <span id="captureLabel" aria-live="polite">Ready — press Enroll or Authenticate</span>
+                <div id="combinedVerdict" role="status" aria-live="assertive" aria-atomic="true">—</div>
               </div>
-            </div>
+            </section>
 
             <!-- Score panel -->
-            <div class="score-panel" aria-label="Biometric scores">
-              <div class="score-row">
-                <span>Recognition</span>
-                <strong id="recognitionScore" aria-label="Recognition score">0.000</strong>
-                <div class="meter" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" aria-label="Recognition meter">
-                  <span id="recognitionMeter"></span>
+            <section class="score-panel" aria-label="Biometric scores">
+              <div class="card-header" style="padding: 0 0 10px 0; border: 0;">
+                <div class="card-title">
+                  <span class="kicker">ML Decision Engine</span>
+                  <strong>Scores &amp; Fusion</strong>
                 </div>
               </div>
-              <div class="score-row">
-                <span>Liveness</span>
-                <strong id="livenessScore" aria-label="Liveness score">0.000</strong>
-                <div class="meter" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" aria-label="Liveness meter">
-                  <span id="livenessMeter"></span>
+
+              <!-- Recognition score card -->
+              <div class="score-card" id="recCard" aria-label="Recognition score">
+                <div class="score-row-top">
+                  <span class="score-label">Recognition</span>
+                  <span class="score-val" id="recScore" aria-live="polite">—</span>
                 </div>
-              </div>
-              <div class="score-row">
-                <span>Challenge</span>
-                <strong id="challengeScore" aria-label="Challenge score">0.000</strong>
-                <div class="meter" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" aria-label="Challenge meter">
-                  <span id="challengeMeter"></span>
+                <div class="meter" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" aria-label="Recognition score meter">
+                  <div class="meter-fill" id="recMeter" style="width: 0%"></div>
                 </div>
+                <div id="recDetail" style="font-size:0.72rem; color:var(--c-muted); font-family:var(--font-mono);"></div>
               </div>
-              <div class="result-box" id="resultBox" aria-label="Decision">
-                <span>Decision</span>
-                <strong>Awaiting sample</strong>
+
+              <!-- Liveness score card -->
+              <div class="score-card" id="liveCard" aria-label="Liveness score">
+                <div class="score-row-top">
+                  <span class="score-label">Liveness</span>
+                  <span class="score-val" id="liveScore" aria-live="polite">—</span>
+                </div>
+                <div class="meter" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" aria-label="Liveness score meter">
+                  <div class="meter-fill" id="liveMeter" style="width: 0%"></div>
+                </div>
+                <div id="liveDetail" style="font-size:0.72rem; color:var(--c-muted); font-family:var(--font-mono);"></div>
               </div>
-            </div>
+
+              <!-- Fused score card -->
+              <div class="score-card" id="fusedCard" aria-label="Fused decision score">
+                <div class="score-row-top">
+                  <span class="score-label">Fused Decision</span>
+                  <span class="score-val" id="fusedScore" aria-live="polite">—</span>
+                </div>
+                <div class="meter" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" aria-label="Fused score meter">
+                  <div class="meter-fill" id="fusedMeter" style="width: 0%"></div>
+                </div>
+                <div id="fusedDetail" style="font-size:0.72rem; color:var(--c-muted); font-family:var(--font-mono);"></div>
+              </div>
+
+              <!-- Attack type -->
+              <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:2px;">
+                <span class="score-label" style="margin:0;">Attack Detection</span>
+                <span class="attack-badge" id="attackBadge" role="status" aria-live="polite">—</span>
+              </div>
+            </section>
+
           </div>
 
           <!-- Analysis row -->
           <div class="analysis-grid">
-            <div class="analysis-block">
-              <div class="block-title">
-                <span class="section-kicker">Frame burst</span>
-                <strong>Liveness trace</strong>
+
+            <!-- Liveness filmstrip -->
+            <div class="card">
+              <div class="card-header">
+                <div class="card-title">
+                  <span class="kicker">Passive Liveness</span>
+                  <strong>Frame Burst</strong>
+                </div>
+                <span id="livenessFrameCount" style="font-size:0.72rem; color:var(--c-muted); font-family:var(--font-mono);">0 frames</span>
               </div>
-              <div
-                id="filmstrip"
-                class="filmstrip"
-                aria-label="Sampled frames from liveness burst"
-                role="list"
-              ></div>
+              <div class="card-body">
+                <div class="filmstrip" id="filmstrip" role="group" aria-label="Liveness frame burst preview">
+                  <!-- filled by JS -->
+                </div>
+              </div>
             </div>
 
-            <div class="analysis-block">
-              <div class="block-title">
-                <span class="section-kicker">Template</span>
-                <strong>Local vector</strong>
+            <!-- Feature vector -->
+            <div class="card">
+              <div class="card-header">
+                <div class="card-title">
+                  <span class="kicker">Deep Feature Space</span>
+                  <strong>LBP + Gabor Vector</strong>
+                </div>
+                <span id="featureDim" style="font-size:0.72rem; color:var(--c-muted); font-family:var(--font-mono);">dim: —</span>
               </div>
-              <!-- Width=1 so JS ResizeObserver can set the real pixel size -->
-              <canvas
-                id="vectorCanvas"
-                width="1"
-                height="120"
-                aria-label="Feature vector bar chart"
-                role="img"
-              ></canvas>
+              <div class="card-body">
+                <canvas id="vectorCanvas" aria-label="Feature vector heatmap visualization"></canvas>
+              </div>
+            </div>
+
+          </div>
+
+          <!-- XAI Explanation -->
+          <div class="card xai-panel">
+            <div class="card-header">
+              <div class="card-title">
+                <span class="kicker">Explainable AI</span>
+                <strong>Decision Trace</strong>
+              </div>
+              <button class="btn" id="btnCopyXAI" aria-label="Copy decision trace to clipboard" style="font-size:0.72rem; padding: 4px 12px; min-height:30px;">
+                Copy
+              </button>
+            </div>
+            <div class="card-body">
+              <ul id="xaiList" role="log" aria-label="XAI decision trace" aria-live="polite">
+                <li style="color:var(--c-muted)">Run an authentication to see the decision trace.</li>
+              </ul>
             </div>
           </div>
 
-          <!-- Audit log -->
-          <div class="log-panel">
-            <div class="block-title">
-              <span class="section-kicker">Audit</span>
-              <strong>Decision log</strong>
-            </div>
-            <ul
-              id="auditLog"
-              aria-live="polite"
-              aria-label="Audit log of recent decisions"
-            ></ul>
-          </div>
-        </section>
-      </section>
-    </main>
+        </main>
+      </div>
+    </section>
 
-    <!-- defer: executes after DOM parse, no module CORS restriction over file:// -->
-    <script defer src="assets/app.js"></script>
-  </body>
+    <!-- ══════════════ TAB: ANALYTICS ══════════════ -->
+    <section id="tab-analytics" class="tab-panel" role="tabpanel" aria-labelledby="tab-analytics-btn">
+
+      <!-- KPI row -->
+      <div class="analytics-grid" role="region" aria-label="Session KPIs">
+        <div class="stat-card">
+          <span class="kicker">Total Attempts</span>
+          <span class="stat-val blue" id="kpiTotal">0</span>
+          <span class="stat-sub" id="kpiTotalSub">0 accepts · 0 denials</span>
+          <div class="stat-card-accent" style="background:var(--grad-blue)"></div>
+        </div>
+        <div class="stat-card">
+          <span class="kicker">False Accept Rate</span>
+          <span class="stat-val red" id="kpiFAR">N/A</span>
+          <span class="stat-sub" id="kpiFARSub">0 false accepts</span>
+          <div class="stat-card-accent" style="background:var(--grad-red)"></div>
+        </div>
+        <div class="stat-card">
+          <span class="kicker">False Reject Rate</span>
+          <span class="stat-val amber" id="kpiFRR">N/A</span>
+          <span class="stat-sub" id="kpiFRRSub">0 false rejects</span>
+          <div class="stat-card-accent" style="background:var(--grad-amber)"></div>
+        </div>
+        <div class="stat-card">
+          <span class="kicker">True Accept Rate</span>
+          <span class="stat-val green" id="kpiTAR">N/A</span>
+          <span class="stat-sub">Genuine success rate</span>
+          <div class="stat-card-accent" style="background:var(--grad-green)"></div>
+        </div>
+      </div>
+
+      <!-- Charts row -->
+      <div class="analysis-grid" style="margin-bottom:20px;">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">
+              <span class="kicker">Score Distribution</span>
+              <strong>Genuine vs Impostor</strong>
+            </div>
+          </div>
+          <div class="card-body">
+            <canvas id="distributionCanvas" width="360" height="160" style="width:100%; height:160px; display:block;" aria-label="Score distribution histogram"></canvas>
+            <div style="display:flex; gap:16px; margin-top:8px; font-size:0.70rem; color:var(--c-muted);">
+              <span style="color:var(--c-green);">▬</span> Genuine &nbsp;
+              <span style="color:var(--c-red);">▬</span> Impostor
+            </div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">
+              <span class="kicker">Session Timeline</span>
+              <strong>Fused Score Over Time</strong>
+            </div>
+          </div>
+          <div class="card-body">
+            <canvas id="timelineCanvas" width="360" height="160" style="width:100%; height:160px; display:block;" aria-label="Score timeline chart"></canvas>
+            <div style="display:flex; gap:16px; margin-top:8px; font-size:0.70rem; color:var(--c-muted);">
+              <span style="color:var(--c-blue);">▬</span> Fused score &nbsp;
+              <span style="color:var(--c-green); opacity:0.4;">▬</span> Threshold
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Attack breakdown + Audit log -->
+      <div class="analysis-grid">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">
+              <span class="kicker">Attack Detection</span>
+              <strong>Threat Breakdown</strong>
+            </div>
+          </div>
+          <div class="card-body" id="attackBreakdown">
+            <p style="font-size:0.82rem; color:var(--c-muted);">No data yet. Run authentications.</p>
+          </div>
+        </div>
+        <div class="card log-panel">
+          <div class="card-header">
+            <div class="card-title">
+              <span class="kicker">Cryptographic Audit Chain</span>
+              <strong>Tamper-Evident Log</strong>
+            </div>
+            <button class="btn" id="btnExportLog" aria-label="Export audit log as JSON" style="font-size:0.72rem; padding:4px 12px; min-height:30px;">
+              Export JSON
+            </button>
+          </div>
+          <div class="card-body">
+            <ul id="auditLog" role="log" aria-label="Audit trail entries" aria-live="polite">
+              <li style="color:var(--c-muted); font-size:0.80rem; padding:8px;">No events recorded.</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ══════════════ TAB: ABOUT ══════════════ -->
+    <section id="tab-about" class="tab-panel" role="tabpanel" aria-labelledby="tab-about-btn">
+      <div class="about-grid">
+
+        <div class="algo-card">
+          <h3><span class="algo-icon">🔲</span> Multi-Scale LBP + Gabor Fusion</h3>
+          <p>Local Binary Patterns computed at radii 1, 2, 3 capture micro-texture at multiple scales. A 4-orientation × 2-frequency Gabor filter bank adds frequency-selective texture sensitivity. Combined into a whitened cosine similarity space.</p>
+          <div style="display:flex; flex-wrap:wrap; gap:6px;">
+            <span class="algo-chip">59-bin uniform LBP</span>
+            <span class="algo-chip">8×8 spatial grid</span>
+            <span class="algo-chip">Gabor mean+variance</span>
+            <span class="algo-chip">Cosine metric</span>
+          </div>
+        </div>
+
+        <div class="algo-card">
+          <h3><span class="algo-icon">📈</span> Online PCA Whitening</h3>
+          <p>Welford's incremental algorithm computes per-dimension mean and variance online. Each feature vector is standardized to zero-mean unit-variance — equivalent to PCA whitening — without storing a training set or computing an eigenvector decomposition.</p>
+          <div style="display:flex; flex-wrap:wrap; gap:6px;">
+            <span class="algo-chip">Welford online</span>
+            <span class="algo-chip">Zero training data</span>
+            <span class="algo-chip">O(d) memory</span>
+          </div>
+        </div>
+
+        <div class="algo-card">
+          <h3><span class="algo-icon">🎯</span> Adaptive EER Threshold</h3>
+          <p>Maintains a sliding window of genuine and impostor similarity scores. Sweeps 50 candidate thresholds to find the EER operating point (FAR ≈ FRR). Falls back to static threshold when fewer than 5 samples per class are available.</p>
+          <div style="display:flex; flex-wrap:wrap; gap:6px;">
+            <span class="algo-chip">EER estimation</span>
+            <span class="algo-chip">200-sample window</span>
+            <span class="algo-chip">50-step sweep</span>
+          </div>
+        </div>
+
+        <div class="algo-card">
+          <h3><span class="algo-icon">🎬</span> Optical Flow + Multi-Scale Liveness</h3>
+          <p>Passive liveness combines: multi-scale LBP entropy (printed photo detection), centroid optical flow arc curvature (replay vs genuine motion), bilateral symmetry score, and Laplacian-based texture sharpness. Attack type is classified with confidence score.</p>
+          <div style="display:flex; flex-wrap:wrap; gap:6px;">
+            <span class="algo-chip">Optical flow arc</span>
+            <span class="algo-chip">Face symmetry</span>
+            <span class="algo-chip">Attack classification</span>
+            <span class="algo-chip">CLAHE equalization</span>
+          </div>
+        </div>
+
+        <div class="algo-card">
+          <h3><span class="algo-icon">🔀</span> Score-Level Fusion</h3>
+          <p>Recognition and liveness scores are fused via weighted sum, geometric mean (weighted product), or min-pool. The fusion engine records outcomes and adapts weights using exponential moving average. ROC curve and EER are computed from session history.</p>
+          <div style="display:flex; flex-wrap:wrap; gap:6px;">
+            <span class="algo-chip">Weighted sum</span>
+            <span class="algo-chip">Geometric fusion</span>
+            <span class="algo-chip">Adaptive weights</span>
+            <span class="algo-chip">ROC / EER</span>
+          </div>
+        </div>
+
+        <div class="algo-card">
+          <h3><span class="algo-icon">🔒</span> PBKDF2 + Cryptographic Audit</h3>
+          <p>Templates are persisted with PBKDF2-HMAC-SHA256 (100k iterations) key derivation + random 16-byte salt per save. The audit log uses SHA-256 hash chaining: each entry's hash includes the previous entry's hash, making the chain tamper-evident.</p>
+          <div style="display:flex; flex-wrap:wrap; gap:6px;">
+            <span class="algo-chip">PBKDF2-HMAC-SHA256</span>
+            <span class="algo-chip">Hash chaining</span>
+            <span class="algo-chip">Template clustering</span>
+            <span class="algo-chip">Zero dependencies</span>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+  </div><!-- /.app-shell -->
+
+  <script src="assets/app.js" defer></script>
+</body>
 </html>
