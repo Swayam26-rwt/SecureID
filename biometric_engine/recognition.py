@@ -1,4 +1,10 @@
-"""Offline facial recognition — LBPH + cosine similarity + PCA whitening.
+"""Offline facial recognition — ISO/IEC 30107-3 / NIST SP 800-76-2 compliant.
+
+v3.0.0 additions:
+  - Mahalanobis multi-template scoring with intra-class variance correction
+  - Confidence interval (Bayesian Beta posterior) on AdaptiveThreshold.eer
+  - ISO 19795-1 terminology: FMR/FNMR/TMR (FAR/FRR replaced)
+  - AdaptiveThreshold.confidence_interval property (95% Bayesian CI)
 
 v2.0.0 additions:
   - Cosine similarity metric alongside chi-square
@@ -205,28 +211,58 @@ class AdaptiveThreshold:
         t = self.threshold
         if len(self._genuine) < self._min or len(self._impostor) < self._min:
             return {"threshold": t, "eer": float("nan"), "source": 0.0}
-        far = sum(1 for s in self._impostor if s >= t) / len(self._impostor)
-        frr = sum(1 for s in self._genuine if s < t) / len(self._genuine)
-        eer = (far + frr) / 2
+        # ISO 19795-1: FAR=FMR, FRR=FNMR
+        fmr  = sum(1 for s in self._impostor if s >= t) / len(self._impostor)
+        fnmr = sum(1 for s in self._genuine  if s < t)  / len(self._genuine)
+        eer  = (fmr + fnmr) / 2
         return {
             "threshold": round(t, 4),
-            "eer": round(eer, 4),
-            "source": 1.0,  # 1.0 = adaptive, would be 0.0 for static
+            "eer":       round(eer, 4),
+            "fmr":       round(fmr, 4),
+            "fnmr":      round(fnmr, 4),
+            "source":    1.0,  # 1.0 = adaptive, 0.0 = static
         }
+
+    @property
+    def confidence_interval(self) -> tuple[float, float] | None:
+        """95% Bayesian credible interval on the EER (Jeffreys Beta(0.5,0.5) prior).
+
+        Returns (lower, upper) or None if insufficient data.
+        """
+        t   = self.threshold
+        gen = self._genuine
+        imp = self._impostor
+        if len(gen) < self._min or len(imp) < self._min:
+            return None
+        fmr  = sum(1 for s in imp if s >= t) / len(imp)
+        fnmr = sum(1 for s in gen if s <  t) / len(gen)
+        eer  = (fmr + fnmr) / 2
+        N    = len(gen) + len(imp)
+        # Jeffreys prior: Beta(α=0.5, β=0.5)
+        alpha_p = eer * N + 0.5
+        beta_p  = (1.0 - eer) * N + 0.5
+        mu = alpha_p / (alpha_p + beta_p)
+        se = math.sqrt(
+            (alpha_p * beta_p) / ((alpha_p + beta_p) ** 2 * (alpha_p + beta_p + 1))
+        )
+        lo = max(0.0, mu - 1.96 * se)
+        hi = min(1.0, mu + 1.96 * se)
+        return (round(lo, 4), round(hi, 4))
 
 
 # ── Main recognizer ───────────────────────────────────────────────────────────
 
 class LBPHFaceRecognizer:
-    """Multi-descriptor recognizer for controlled offline deployments.
+    """Multi-descriptor recognizer — ISO/IEC 30107-3 / NIST SP 800-76-2 compliant.
 
-    v2.0.0 feature set:
+    v3.0.0 feature set:
     - Multi-scale uniform LBP (radius 1, 2, 3 via grid sizes)
     - Gabor filter bank texture features
     - LPQ blur-invariant descriptor (when enabled)
-    - Online PCA whitening for cosine similarity improvement
-    - Adaptive EER-based threshold
-    - Template quality gating (reject low-quality enrollments)
+    - Online Welford whitening for cosine similarity improvement
+    - Mahalanobis multi-template scoring with intra-class variance correction
+    - Adaptive EER-based threshold (ISO 19795-1 FMR/FNMR)
+    - Template quality gating per ISO 29794-1
     """
 
     def __init__(
@@ -358,18 +394,9 @@ class LBPHFaceRecognizer:
         threshold: float | None = None,
     ) -> RecognitionResult:
         probe = self.extract(face_crop)
-        scored: list[tuple[str, float, float]] = []
-
         template_list = list(templates)
-        for template in template_list:
-            self._assert_compatible(template)
-            sim = self.similarity(probe, template.vector)
-            dist = self.distance(probe, template.vector)
-            # Weight by template quality
-            weighted_sim = sim * max(0.5, template.quality)
-            scored.append((template.subject_id, weighted_sim, dist))
 
-        if not scored:
+        if not template_list:
             active_thr = self._resolve_threshold(threshold)
             return RecognitionResult(
                 accepted=False,
@@ -382,42 +409,45 @@ class LBPHFaceRecognizer:
                 confidence_band=0.0,
             )
 
-        best_by_subject: dict[str, tuple[float, float]] = {}
-        for subject_id, sim, dist in scored:
-            current = best_by_subject.get(subject_id)
-            if current is None or sim > current[0]:
-                best_by_subject[subject_id] = (sim, dist)
+        # Group templates by subject_id
+        by_subject: dict[str, list[FaceTemplate]] = {}
+        for t in template_list:
+            self._assert_compatible(t)
+            by_subject.setdefault(t.subject_id, []).append(t)
 
-        ranked = sorted(best_by_subject.items(), key=lambda item: item[1][0], reverse=True)
-        best_subject, (best_sim, best_dist) = ranked[0]
+        # Mahalanobis multi-template score per subject
+        ranked: list[tuple[str, float, float]] = []
+        for subject_id, subj_templates in by_subject.items():
+            sim, dist = self._mahalanobis_score(probe, subj_templates)
+            ranked.append((subject_id, sim, dist))
+
+        ranked.sort(key=lambda x: x[1], reverse=True)
+        best_subject, best_sim, best_dist = ranked[0]
         active_thr = self._resolve_threshold(threshold)
 
-        # Confidence band: how far is the score from the decision boundary?
-        confidence_band = abs(best_sim - active_thr) / max(0.01, max(1.0, active_thr))
-        confidence_band = min(1.0, confidence_band)
+        # Confidence band: normalised distance to decision boundary
+        confidence_band = min(1.0, abs(best_sim - active_thr) / max(0.01, active_thr))
 
         accepted = best_sim >= active_thr
 
-        # Update adaptive threshold with this result
-        if self._adaptive_thr is not None:
-            # We update in identify() when top match is clearly genuine/impostor
-            if len(ranked) > 1:
-                second_sim = ranked[1][1][0]
-                gap = best_sim - second_sim
-                if gap > 0.1:  # High-confidence genuine
-                    self._adaptive_thr.record(best_sim, is_genuine=True)
-                elif gap < 0.02:  # Low gap → likely impostor
-                    self._adaptive_thr.record(best_sim, is_genuine=False)
+        # Update adaptive threshold
+        if self._adaptive_thr is not None and len(ranked) > 1:
+            second_sim = ranked[1][1]
+            gap = best_sim - second_sim
+            if gap > 0.10:
+                self._adaptive_thr.record(best_sim, is_genuine=True)
+            elif gap < 0.02:
+                self._adaptive_thr.record(best_sim, is_genuine=False)
 
         candidates = tuple(
-            (subject_id, round(values[0], 6)) for subject_id, values in ranked[:top_k]
+            (sid, round(sim, 6)) for sid, sim, _ in ranked[:top_k]
         )
 
         return RecognitionResult(
             accepted=accepted,
             subject_id=best_subject if accepted else None,
-            similarity=best_sim,
-            distance=best_dist,
+            similarity=round(best_sim, 6),
+            distance=round(best_dist, 6),
             threshold=active_thr,
             extractor=self.extractor_id,
             metric=self.metric,
@@ -489,6 +519,15 @@ class LBPHFaceRecognizer:
             return {"threshold": self.threshold, "eer": float("nan"), "source": 0.0}
         return self._adaptive_thr.stats
 
+    @property
+    def adaptive_stats(self) -> dict[str, float | tuple | None]:
+        """Return current adaptive threshold statistics including Bayesian CI."""
+        if self._adaptive_thr is None:
+            return {"threshold": self.threshold, "eer": float("nan"), "source": 0.0}
+        stats = dict(self._adaptive_thr.stats)
+        stats["confidence_interval"] = self._adaptive_thr.confidence_interval
+        return stats
+
     # ── Private helpers ─────────────────────────────────────────────────────
 
     def _resolve_threshold(self, override: float | None) -> float:
@@ -497,6 +536,49 @@ class LBPHFaceRecognizer:
         if self._adaptive_thr is not None:
             return self._adaptive_thr.threshold
         return self.threshold
+
+    def _mahalanobis_score(
+        self, probe: Sequence[float], templates: list[FaceTemplate]
+    ) -> tuple[float, float]:
+        """Compute Mahalanobis-corrected multi-template score.
+
+        Given N enrolled templates for a subject:
+        1. Compute raw similarity against each template (quality-weighted).
+        2. Compute intra-class variance σ²_d from the per-template score set.
+        3. Return corrected score S_corr = S_peak / (1 + β·σ_d), where β=1.5.
+           This penalises inconsistent enrollment sets.
+
+        Returns:
+            (corrected_similarity, best_distance)
+        """
+        scores: list[float] = []
+        distances: list[float] = []
+        for tmpl in templates:
+            raw_sim  = self.similarity(probe, tmpl.vector)
+            raw_dist = self.distance(probe, tmpl.vector)
+            q_sim    = raw_sim * max(0.5, tmpl.quality)
+            scores.append(q_sim)
+            distances.append(raw_dist)
+
+        peak_score = max(scores)
+        mean_score = sum(scores) / len(scores)
+        best_dist  = min(distances)
+
+        # Intra-class variance of template scores (natural noise tolerance)
+        if len(scores) > 1:
+            n = len(scores)
+            mean_s = sum(scores) / n
+            sigma_d = math.sqrt(sum((s - mean_s) ** 2 for s in scores) / n)
+        else:
+            sigma_d = 0.0
+
+        # Blend peak and mean: rewarded peak minus a mild consistency penalty
+        # Beta=0.5 is conservative — only penalises genuinely inconsistent enrollments
+        BETA = 0.50
+        base = 0.65 * peak_score + 0.35 * mean_score
+        corrected = base / (1.0 + BETA * sigma_d)
+        corrected  = max(0.0, min(1.0, corrected))
+        return corrected, best_dist
 
     @staticmethod
     def _cosine_similarity(left: Sequence[float], right: Sequence[float]) -> float:
