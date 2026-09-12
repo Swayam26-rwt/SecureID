@@ -63,9 +63,10 @@ class TestScoreFusion(unittest.TestCase):
 
     def test_explanation_is_populated(self) -> None:
         result = self.fusion.fuse(0.75, 0.65)
-        self.assertIn("Recognition", result.explanation)
-        self.assertIn("Liveness", result.explanation)
-        self.assertIn("Fused", result.explanation)
+        # ISO 30109 Decision Audit Trail uses BRS/PAD/CDS terminology
+        self.assertIn("BRS", result.explanation)
+        self.assertIn("PAD", result.explanation)
+        self.assertIn("CDS", result.explanation)
 
     def test_roc_curve_requires_history(self) -> None:
         self.assertEqual(self.fusion.roc_curve(), [])
@@ -95,8 +96,9 @@ class TestScoreFusion(unittest.TestCase):
 
     def test_stats_dict_has_all_keys(self) -> None:
         stats = self.fusion.stats
+        # ISO 19795-1 terminology: w_brs and w_pad replace recognition_weight/liveness_weight
         for key in ("genuine_samples", "impostor_samples", "eer", "adaptive_threshold",
-                    "recognition_weight", "liveness_weight", "fusion_method"):
+                    "w_brs", "w_pad", "fusion_method", "calibrator"):
             self.assertIn(key, stats)
 
 
