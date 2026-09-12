@@ -1,16 +1,20 @@
 [project]
 name = "secureid"
-version = "2.0.0"
-description = "SecureID — High-performance offline facial recognition and liveness detection engine with advanced ML signal processing."
+version = "3.0.0"
+description = "SecureID — ISO/IEC 30107-3 compliant offline biometric decision platform with Platt calibration, Mahalanobis multi-template matching, Bayesian EER, adaptive EMA weight fusion, and SHA-256 audit chain."
 requires-python = ">=3.9"
 readme = "README.md"
-license = { text = "MIT" }
 authors = [{ name = "Swayam Rawat", email = "swaymrawat862@gmail.com" }]
-keywords = ["biometrics", "facial-recognition", "liveness-detection", "edge-computing", "computer-vision", "machine-learning", "secureid"]
+keywords = [
+    "biometrics", "facial-recognition", "liveness-detection", "presentation-attack-detection",
+    "iso-30107", "nist-800-76", "fido2", "pad", "brt", "eer", "roc", "platt-calibration",
+    "isotonic-regression", "mahalanobis", "score-fusion", "edge-computing",
+    "computer-vision", "machine-learning", "secureid", "air-gapped", "zero-dependency"
+]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
+    "Intended Audience :: Science/Research",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
@@ -18,7 +22,9 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: Security",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Topic :: Scientific/Engineering :: Image Recognition",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
 ]
 dependencies = []
 
@@ -36,6 +42,8 @@ dev = [
 Homepage = "https://github.com/Swayam26-rwt/SecureID"
 Repository = "https://github.com/Swayam26-rwt/SecureID.git"
 Documentation = "https://github.com/Swayam26-rwt/SecureID#readme"
+Changelog = "https://github.com/Swayam26-rwt/SecureID/blob/main/CHANGELOG.md"
+Issues = "https://github.com/Swayam26-rwt/SecureID/issues"
 
 [build-system]
 requires = ["setuptools>=68"]
